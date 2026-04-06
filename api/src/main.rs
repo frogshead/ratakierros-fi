@@ -15,10 +15,13 @@ async fn closest_handler(Query(params): Query<ClosestQuery>) -> Json<TrackResult
     let radius = params.radius.unwrap_or(5000.0);
     match get_closest_track(params.lat, params.lon, radius).await {
         Ok(result) => Json(result),
-        Err(_) => Json(TrackResult {
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            Json(TrackResult {
             found: false,
             track: None,
-        }),
+        })
+        }
     }
 }
 

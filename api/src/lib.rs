@@ -25,12 +25,11 @@ pub async fn get_closest_track(lat: f64, lon: f64, radius: f64) -> Result<TrackR
         lon = lon,
     );
 
-    let url = format!(
-        "https://overpass-api.de/api/interpreter?data={}",
-        urlencoding::encode(&query)
-    );
-
-    let response = reqwest::get(&url)
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://overpass-api.de/api/interpreter")
+        .form(&[("data", &query)])
+        .send()
         .await
         .map_err(|e| format!("Overpass request failed: {}", e))?;
 
