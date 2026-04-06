@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ratakierros - Etsi lähin urheilukenttä</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    #map { height: 100vh; width: 100%; }
+    #status {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      background: white; padding: 2rem; border-radius: 8px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.2); z-index: 1000;
+      text-align: center; font-size: 1.1rem;
+    }
+    #status.hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="status">Haetaan sijaintia...</div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const statusEl = document.getElementById('status');
+
+    function showError(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function initMap(lat, lon, track) {
+      statusEl.classList.add('hidden');
+      const map = L.map('map').setView([lat, lon], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19,
+      }).addTo(map);
+
+      L.circleMarker([lat, lon], { radius: 8, color: '#2563eb', fillOpacity: 0.8 })
+        .addTo(map)
+        .bindPopup('Sijaintisi');
+
+      if (track) {
+        const name = track.name || 'Urheilukenttä';
+        const dist = Math.round(track.distance_m);
+        L.marker([track.lat, track.lon])
+          .addTo(map)
+          .bindPopup(`<b>${name}</b><br>${dist} m päässä`)
+          .openPopup();
+        map.fitBounds([[lat, lon], [track.lat, track.lon]], { padding: [50, 50] });
+      }
+    }
+
+    async function findTrack(lat, lon) {
+      statusEl.textContent = 'Etsitään lähintä urheilukenttää...';
+      try {
+        const res = await fetch(`/api/closest?lat=${lat}&lon=${lon}&radius=10000`);
+        const data = await res.json();
+        if (data.found && data.track) {
+          initMap(lat, lon, data.track);
+        } else {
+          initMap(lat, lon, null);
+          showError('Urheilukenttää ei löytynyt lähistöltä');
+        }
+      } catch (e) {
+        initMap(lat, lon, null);
+        showError('Virhe haettaessa urheilukenttää');
+      }
+    }
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => findTrack(pos.coords.latitude, pos.coords.longitude),
+        (err) => showError('Sijainnin haku epäonnistui. Salli sijainnin käyttö selaimessa.'),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    } else {
+      showError('Selaimesi ei tue paikannusta.');
+    }
+  </script>
+</body>
+</html>

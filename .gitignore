@@ -1,0 +1,3 @@
+api/target/
+.env
+*.swp
