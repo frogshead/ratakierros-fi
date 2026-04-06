@@ -9,75 +9,250 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     #map { height: 100vh; width: 100%; }
+    #controls {
+      position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
+      background: white; padding: 0.75rem 1rem; border-radius: 8px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.2); z-index: 1000;
+      display: flex; align-items: center; gap: 0.5rem;
+      max-width: 500px; width: 90%;
+    }
+    #controls input[type="text"] {
+      flex: 1; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;
+      font-size: 0.95rem; min-width: 0;
+    }
+    #controls button {
+      padding: 0.5rem 1rem; background: #2563eb; color: white; border: none;
+      border-radius: 4px; font-size: 0.95rem; cursor: pointer; white-space: nowrap;
+    }
+    #controls button:hover { background: #1d4ed8; }
+    #controls button:disabled { background: #93c5fd; cursor: default; }
+    #controls .hint {
+      position: absolute; top: 100%; left: 0; right: 0;
+      text-align: center; font-size: 0.8rem; color: #555;
+      background: white; padding: 0.3rem 0.5rem; border-radius: 0 0 8px 8px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    #controls .error {
+      position: absolute; top: 100%; left: 0; right: 0;
+      text-align: center; font-size: 0.85rem; color: #dc2626;
+      background: white; padding: 0.3rem 0.5rem; border-radius: 0 0 8px 8px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
     #status {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      background: white; padding: 2rem; border-radius: 8px;
+      background: white; padding: 1.5rem 2rem; border-radius: 8px;
       box-shadow: 0 2px 16px rgba(0,0,0,0.2); z-index: 1000;
       text-align: center; font-size: 1.1rem;
     }
     #status.hidden { display: none; }
+    .gpx-btn {
+      display: inline-block; margin-top: 0.5rem; padding: 0.3rem 0.6rem;
+      background: #2563eb; color: white; border: none; border-radius: 4px;
+      font-size: 0.85rem; cursor: pointer; text-decoration: none;
+    }
+    .gpx-btn:hover { background: #1d4ed8; }
   </style>
 </head>
 <body>
-  <div id="status">Haetaan sijaintia...</div>
+  <div id="controls">
+    <input type="text" id="location-input" placeholder="Paikkakunta tai koordinaatit (esim. 60.17,24.94)">
+    <button id="location-submit">Hae</button>
+    <div class="hint" id="controls-hint">Tai klikkaa karttaa valitaksesi sijainnin</div>
+    <div class="error hidden" id="input-error"></div>
+  </div>
+  <div id="status" class="hidden"></div>
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const statusEl = document.getElementById('status');
+    const inputEl = document.getElementById('location-input');
+    const inputError = document.getElementById('input-error');
+    const hintEl = document.getElementById('controls-hint');
+    const submitBtn = document.getElementById('location-submit');
 
-    function showError(msg) {
-      statusEl.textContent = msg;
+    let map = null;
+    let userMarker = null;
+    let trackMarker = null;
+
+    function generateGpx(lat, lon, name) {
+      const timestamp = new Date().toISOString();
+      const safeName = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Ratakierros.fi"
+  xmlns="http://www.topografix.com/GPX/1/1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <wpt lat="${lat}" lon="${lon}">
+    <name>${safeName}</name>
+    <type>Athletics Track</type>
+    <time>${timestamp}</time>
+  </wpt>
+</gpx>`;
     }
 
-    function initMap(lat, lon, track) {
+    function downloadGpx(lat, lon, name) {
+      const gpx = generateGpx(lat, lon, name);
+      const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name.replace(/[^a-zA-Z0-9äöåÄÖÅ_-]/g, '_') + '.gpx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function showStatus(msg) {
+      statusEl.textContent = msg;
+      statusEl.classList.remove('hidden');
+    }
+
+    function hideStatus() {
       statusEl.classList.add('hidden');
-      const map = L.map('map').setView([lat, lon], 14);
+    }
+
+    function showInputError(msg) {
+      inputError.textContent = msg;
+      inputError.classList.remove('hidden');
+      hintEl.classList.add('hidden');
+    }
+
+    function clearInputError() {
+      inputError.textContent = '';
+      inputError.classList.add('hidden');
+      hintEl.classList.remove('hidden');
+    }
+
+    function initMap(lat, lon, zoom) {
+      if (map) return;
+      map = L.map('map').setView([lat, lon], zoom);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap contributors',
         maxZoom: 19,
       }).addTo(map);
 
-      L.circleMarker([lat, lon], { radius: 8, color: '#2563eb', fillOpacity: 0.8 })
+      map.on('click', function(e) {
+        clearInputError();
+        findTrack(e.latlng.lat, e.latlng.lng);
+      });
+    }
+
+    function showResult(lat, lon, track) {
+      hideStatus();
+
+      if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
+      if (trackMarker) { map.removeLayer(trackMarker); trackMarker = null; }
+
+      userMarker = L.circleMarker([lat, lon], { radius: 8, color: '#2563eb', fillOpacity: 0.8 })
         .addTo(map)
         .bindPopup('Sijaintisi');
 
       if (track) {
         const name = track.name || 'Urheilukenttä';
         const dist = Math.round(track.distance_m);
-        L.marker([track.lat, track.lon])
+        const gpxBtnId = 'gpx-dl-' + Date.now();
+        trackMarker = L.marker([track.lat, track.lon])
           .addTo(map)
-          .bindPopup(`<b>${name}</b><br>${dist} m päässä`)
+          .bindPopup(`<b>${name}</b><br>${dist} m päässä<br><button class="gpx-btn" id="${gpxBtnId}">Lataa GPX</button>`)
           .openPopup();
+        trackMarker.on('popupopen', () => {
+          const btn = document.getElementById(gpxBtnId);
+          if (btn) btn.onclick = () => downloadGpx(track.lat, track.lon, name);
+        });
         map.fitBounds([[lat, lon], [track.lat, track.lon]], { padding: [50, 50] });
+      } else {
+        map.setView([lat, lon], 14);
       }
     }
 
     async function findTrack(lat, lon) {
-      statusEl.textContent = 'Etsitään lähintä urheilukenttää...';
+      showStatus('Etsitään lähintä urheilukenttää...');
       try {
         const res = await fetch(`/api/closest?lat=${lat}&lon=${lon}&radius=10000`);
         const data = await res.json();
         if (data.found && data.track) {
-          initMap(lat, lon, data.track);
+          showResult(lat, lon, data.track);
         } else {
-          initMap(lat, lon, null);
-          showError('Urheilukenttää ei löytynyt lähistöltä');
+          showResult(lat, lon, null);
+          showStatus('Urheilukenttää ei löytynyt lähistöltä');
         }
       } catch (e) {
-        initMap(lat, lon, null);
-        showError('Virhe haettaessa urheilukenttää');
+        showResult(lat, lon, null);
+        showStatus('Virhe haettaessa urheilukenttää');
       }
     }
 
+    function parseLocation(text) {
+      const trimmed = text.trim();
+      const coordMatch = trimmed.match(/^(-?\d+\.?\d*)\s*[,;\s]\s*(-?\d+\.?\d*)$/);
+      if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lon = parseFloat(coordMatch[2]);
+        if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+          return { lat, lon };
+        }
+      }
+      return null;
+    }
+
+    async function geocode(query) {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=fi`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.length > 0) {
+        return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+      }
+      return null;
+    }
+
+    submitBtn.addEventListener('click', handleSubmit);
+    inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSubmit(); });
+
+    async function handleSubmit() {
+      const value = inputEl.value.trim();
+      if (!value) return;
+      clearInputError();
+
+      const coords = parseLocation(value);
+      if (coords) {
+        findTrack(coords.lat, coords.lon);
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Haetaan...';
+      try {
+        const result = await geocode(value);
+        if (result) {
+          findTrack(result.lat, result.lon);
+        } else {
+          showInputError('Paikkaa ei löytynyt. Kokeile toista hakusanaa.');
+        }
+      } catch (e) {
+        showInputError('Virhe paikannuksessa. Yritä uudelleen.');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Hae';
+      }
+    }
+
+    // Always show the map; use geolocation as default if available
     if ('geolocation' in navigator) {
+      initMap(61.5, 24.0, 6);
       navigator.geolocation.getCurrentPosition(
-        (pos) => findTrack(pos.coords.latitude, pos.coords.longitude),
-        (err) => showError('Sijainnin haku epäonnistui. Salli sijainnin käyttö selaimessa.'),
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+          map.setView([lat, lon], 13);
+          findTrack(lat, lon);
+        },
+        () => { /* no-op, map already shown */ },
         { enableHighAccuracy: true, timeout: 10000 }
       );
     } else {
-      showError('Selaimesi ei tue paikannusta.');
+      initMap(61.5, 24.0, 6);
     }
   </script>
 </body>
