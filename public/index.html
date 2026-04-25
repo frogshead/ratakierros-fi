@@ -3,257 +3,943 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ratakierros - Etsi lähin urheilukenttä</title>
+  <title>Ratakierros.fi — Juoksuratahakemisto</title>
+  <!-- API_BASE_PLACEHOLDER -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-    #map { height: 100vh; width: 100%; }
-    #controls {
-      position: fixed; top: 1rem; left: 50%; transform: translateX(-50%);
-      background: white; padding: 0.75rem 1rem; border-radius: 8px;
-      box-shadow: 0 2px 16px rgba(0,0,0,0.2); z-index: 1000;
-      display: flex; align-items: center; gap: 0.5rem;
-      max-width: 500px; width: 90%;
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --blue:       #2563eb;
+      --blue-dark:  #1d4ed8;
+      --blue-light: #dbeafe;
+      --bg:         #f3f4f6;
+      --surface:    #ffffff;
+      --border:     #e5e7eb;
+      --text:       #111827;
+      --muted:      #6b7280;
+      --red:        #dc2626;
+      --green:      #059669;
+      --green-bg:   #ecfdf5;
     }
-    #controls input[type="text"] {
-      flex: 1; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;
-      font-size: 0.95rem; min-width: 0;
+
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      overflow: hidden;
     }
-    #controls button {
-      padding: 0.5rem 1rem; background: #2563eb; color: white; border: none;
-      border-radius: 4px; font-size: 0.95rem; cursor: pointer; white-space: nowrap;
+
+    /* ── Layout ─────────────────────────────────────────── */
+    .app {
+      display: flex;
+      height: 100dvh;
     }
-    #controls button:hover { background: #1d4ed8; }
-    #controls button:disabled { background: #93c5fd; cursor: default; }
-    #controls .hint {
-      position: absolute; top: 100%; left: 0; right: 0;
-      text-align: center; font-size: 0.8rem; color: #555;
-      background: white; padding: 0.3rem 0.5rem; border-radius: 0 0 8px 8px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+
+    .sidebar {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      overflow: hidden;
     }
-    #controls .error {
-      position: absolute; top: 100%; left: 0; right: 0;
-      text-align: center; font-size: 0.85rem; color: #dc2626;
-      background: white; padding: 0.3rem 0.5rem; border-radius: 0 0 8px 8px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+
+    .main {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      background: var(--surface);
+      overflow: hidden;
     }
-    #status {
-      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      background: white; padding: 1.5rem 2rem; border-radius: 8px;
-      box-shadow: 0 2px 16px rgba(0,0,0,0.2); z-index: 1000;
-      text-align: center; font-size: 1.1rem;
+
+    @media (min-width: 768px) {
+      .sidebar {
+        width: 360px;
+        flex-shrink: 0;
+        border-right: 1px solid var(--border);
+      }
+      .main { display: flex; }
     }
-    #status.hidden { display: none; }
-    .gpx-btn {
-      display: inline-block; margin-top: 0.5rem; padding: 0.3rem 0.6rem;
-      background: #2563eb; color: white; border: none; border-radius: 4px;
-      font-size: 0.85rem; cursor: pointer; text-decoration: none;
+
+    /* Mobile: when a track is open, hide sidebar, show main */
+    .app.detail-open .sidebar { display: none; }
+    .app.detail-open .main    { display: flex; }
+
+    @media (min-width: 768px) {
+      .app.detail-open .sidebar { display: flex; }
     }
-    .gpx-btn:hover { background: #1d4ed8; }
+
+    /* ── Sidebar header ──────────────────────────────────── */
+    .sidebar-header {
+      padding: 0.875rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .sidebar-header h1 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .btn-user {
+      padding: 0.35rem 0.8rem;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .btn-user:hover { background: var(--blue-dark); }
+    .btn-user.logged-in {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-user.logged-in:hover { background: #e5e7eb; }
+
+    /* ── Search bar ──────────────────────────────────────── */
+    .search-bar {
+      padding: 0.625rem 0.875rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+
+    .search-bar input {
+      flex: 1;
+      padding: 0.45rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.875rem;
+      outline: none;
+      background: var(--bg);
+    }
+    .search-bar input:focus { border-color: var(--blue); background: #fff; }
+
+    .btn-locate {
+      padding: 0.45rem 0.6rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+    }
+    .btn-locate:hover { background: #e5e7eb; }
+
+    /* ── Track list ──────────────────────────────────────── */
+    .track-list {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .track-list-msg {
+      padding: 2rem 1rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .track-card {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      transition: background 0.1s;
+    }
+    .track-card:hover  { background: #f9fafb; }
+    .track-card.active { background: var(--blue-light); }
+
+    .track-card-icon {
+      width: 38px;
+      height: 38px;
+      background: var(--blue-light);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+
+    .track-card-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .track-card-name {
+      font-size: 0.875rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .track-card-sub {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.1rem;
+    }
+
+    .track-card-record {
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--blue);
+      flex-shrink: 0;
+    }
+
+    /* ── Detail panel ────────────────────────────────────── */
+    .detail-header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    .btn-back {
+      padding: 0.35rem 0.7rem;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .btn-back:hover { background: var(--bg); }
+
+    .detail-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .detail-content {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .detail-empty {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+      flex-direction: column;
+      gap: 0.5rem;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    .detail-empty .icon { font-size: 3rem; }
+
+    /* ── Map ─────────────────────────────────────────────── */
+    #detail-map {
+      height: 220px;
+      background: var(--bg);
+      flex-shrink: 0;
+    }
+
+    /* ── Detail sections ─────────────────────────────────── */
+    .detail-section {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 0.625rem;
+    }
+
+    /* ── Directions ──────────────────────────────────────── */
+    .btn-directions {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 0.875rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      text-decoration: none;
+      color: var(--text);
+      font-size: 0.875rem;
+    }
+    .btn-directions:hover { background: #e5e7eb; }
+
+    /* ── Records table ───────────────────────────────────── */
+    .records-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    .records-table th {
+      text-align: left;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--muted);
+      padding: 0 0.5rem 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .records-table td {
+      padding: 0.5rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .records-table tr:last-child td { border-bottom: none; }
+
+    .no-records {
+      color: var(--muted);
+      font-size: 0.875rem;
+      padding: 0.25rem 0;
+    }
+
+    .personal-best {
+      margin-top: 0.625rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--green-bg);
+      border-radius: 6px;
+      font-size: 0.8rem;
+      color: var(--green);
+      font-weight: 500;
+    }
+
+    /* ── Log run form ────────────────────────────────────── */
+    .log-run-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.625rem;
+    }
+
+    .time-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .time-row input {
+      flex: 1;
+      padding: 0.45rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.875rem;
+      background: var(--bg);
+    }
+    .time-row input:focus { outline: none; border-color: var(--blue); background: #fff; }
+
+    .btn-primary {
+      padding: 0.45rem 1rem;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-primary:hover    { background: var(--blue-dark); }
+    .btn-primary:disabled { background: #93c5fd; cursor: default; }
+
+    .form-hint  { font-size: 0.75rem; color: var(--muted); }
+    .form-error { font-size: 0.8rem;  color: var(--red); }
+    .form-ok    { font-size: 0.8rem;  color: var(--green); }
+
+    .login-prompt {
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    .login-prompt a {
+      color: var(--blue);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    /* ── Auth modal ──────────────────────────────────────── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .modal-overlay.hidden { display: none; }
+
+    .modal {
+      background: #fff;
+      border-radius: 12px;
+      width: 100%;
+      max-width: 380px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+    }
+
+    .modal-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-tab {
+      flex: 1;
+      padding: 0.875rem;
+      text-align: center;
+      font-size: 0.875rem;
+      cursor: pointer;
+      color: var(--muted);
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      font-weight: 500;
+    }
+    .modal-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+    .modal-body {
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.625rem;
+    }
+
+    .modal-body label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .modal-body input {
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.875rem;
+      width: 100%;
+      background: var(--bg);
+    }
+    .modal-body input:focus { outline: none; border-color: var(--blue); background: #fff; }
+
+    .modal-footer {
+      padding: 0.875rem 1.25rem;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .btn-secondary {
+      padding: 0.45rem 0.875rem;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .btn-secondary:hover { background: var(--bg); }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <input type="text" id="location-input" placeholder="Paikkakunta tai koordinaatit (esim. 60.17,24.94)">
-    <button id="location-submit">Hae</button>
-    <div class="hint" id="controls-hint">Tai klikkaa karttaa valitaksesi sijainnin</div>
-    <div class="error hidden" id="input-error"></div>
+
+<div class="app" id="app">
+
+  <!-- ── Sidebar ─────────────────────────────────────────── -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1>🏃 Ratakierros.fi</h1>
+      <button class="btn-user" id="btn-user">Kirjaudu</button>
+    </div>
+    <div class="search-bar">
+      <input type="search" id="search-input" placeholder="Hae nimellä tai paikkakunnalla…" autocomplete="off">
+      <button class="btn-locate" id="btn-locate" title="Näytä lähistön kentät">📍</button>
+    </div>
+    <div class="track-list" id="track-list">
+      <div class="track-list-msg">Haetaan kenttiä…</div>
+    </div>
   </div>
-  <div id="status" class="hidden"></div>
-  <div id="map"></div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    const statusEl = document.getElementById('status');
-    const inputEl = document.getElementById('location-input');
-    const inputError = document.getElementById('input-error');
-    const hintEl = document.getElementById('controls-hint');
-    const submitBtn = document.getElementById('location-submit');
+  <!-- ── Main / detail ──────────────────────────────────── -->
+  <div class="main" id="main">
+    <div class="detail-header" id="detail-header" style="display:none">
+      <button class="btn-back" id="btn-back">← Takaisin</button>
+      <span class="detail-title" id="detail-title"></span>
+    </div>
+    <div class="detail-content" id="detail-content">
+      <div class="detail-empty">
+        <span class="icon">🏟️</span>
+        Valitse kenttä listasta
+      </div>
+    </div>
+  </div>
 
-    let map = null;
-    let userMarker = null;
-    let trackMarker = null;
+</div>
 
-    function generateGpx(lat, lon, name) {
-      const timestamp = new Date().toISOString();
-      const safeName = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Ratakierros.fi"
-  xmlns="http://www.topografix.com/GPX/1/1"
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-  xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
-  <wpt lat="${lat}" lon="${lon}">
-    <name>${safeName}</name>
-    <type>Athletics Track</type>
-    <time>${timestamp}</time>
-  </wpt>
-</gpx>`;
-    }
+<!-- ── Auth modal ─────────────────────────────────────── -->
+<div class="modal-overlay hidden" id="modal-auth">
+  <div class="modal">
+    <div class="modal-tabs">
+      <div class="modal-tab active" id="tab-login"    onclick="switchTab('login')">Kirjaudu</div>
+      <div class="modal-tab"        id="tab-register" onclick="switchTab('register')">Rekisteröidy</div>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeModal()">Peruuta</button>
+      <button class="btn-primary"   id="btn-auth-submit">Kirjaudu</button>
+    </div>
+  </div>
+</div>
 
-    function downloadGpx(lat, lon, name) {
-      const gpx = generateGpx(lat, lon, name);
-      const blob = new Blob([gpx], { type: 'application/gpx+xml' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = name.replace(/[^a-zA-Z0-9äöåÄÖÅ_-]/g, '_') + '.gpx';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── State ──────────────────────────────────────────────────
+const state = {
+  jwt:             localStorage.getItem('jwt'),
+  user:            null,      // { id, display_name }
+  tracks:          [],
+  selectedId:      null,
+  userLoc:         null,      // { lat, lon }
+  detailMap:       null,
+  detailMarker:    null,
+  authTab:         'login',
+};
 
-    function showStatus(msg) {
-      statusEl.textContent = msg;
-      statusEl.classList.remove('hidden');
-    }
+// ── Utils ──────────────────────────────────────────────────
+function esc(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
-    function hideStatus() {
-      statusEl.classList.add('hidden');
-    }
+function trackDisplayName(t) {
+  if (t.name) return t.name;
+  if (t.city && t.suburb) return `${t.city} - ${t.suburb}`;
+  return t.city || 'Nimetön kenttä';
+}
 
-    function showInputError(msg) {
-      inputError.textContent = msg;
-      inputError.classList.remove('hidden');
-      hintEl.classList.add('hidden');
-    }
+function fmtTime(sec) {
+  if (sec == null) return '—';
+  const m = Math.floor(sec / 60);
+  const s = (sec % 60).toFixed(2).padStart(5, '0');
+  return m === 0 ? `${parseFloat(s).toFixed(2)} s` : `${m}:${s}`;
+}
 
-    function clearInputError() {
-      inputError.textContent = '';
-      inputError.classList.add('hidden');
-      hintEl.classList.remove('hidden');
-    }
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (state.jwt) headers['Authorization'] = `Bearer ${state.jwt}`;
+  const base = (window.API_BASE || '').replace(/\/$/, '');
+  const res  = await fetch(base + path, { ...opts, headers });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Palvelinvirhe');
+  return data;
+}
 
-    function initMap(lat, lon, zoom) {
-      if (map) return;
-      map = L.map('map').setView([lat, lon], zoom);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-        maxZoom: 19,
-      }).addTo(map);
+// ── Track list ─────────────────────────────────────────────
+async function loadTracks(lat, lon, q) {
+  const p = new URLSearchParams();
+  if (lat != null) { p.set('lat', lat); p.set('lon', lon); }
+  if (q) p.set('q', q);
 
-      map.on('click', function(e) {
-        clearInputError();
-        findTrack(e.latlng.lat, e.latlng.lng);
+  const listEl = document.getElementById('track-list');
+  listEl.innerHTML = '<div class="track-list-msg">Haetaan…</div>';
+
+  try {
+    const tracks = await api(`/api/tracks?${p}`);
+    state.tracks  = tracks;
+    renderList(tracks);
+  } catch {
+    listEl.innerHTML = '<div class="track-list-msg">Kenttien haku epäonnistui</div>';
+  }
+}
+
+function renderList(tracks) {
+  const listEl = document.getElementById('track-list');
+
+  if (!tracks.length) {
+    listEl.innerHTML = '<div class="track-list-msg">Kenttiä ei löytynyt</div>';
+    return;
+  }
+
+  listEl.innerHTML = tracks.map(t => {
+    const name   = esc(trackDisplayName(t));
+    const city   = t.city ? esc(t.city) : '';
+    const dist   = t.distance_m != null
+      ? (t.distance_m < 1000
+          ? `${Math.round(t.distance_m)} m`
+          : `${(t.distance_m / 1000).toFixed(1)} km`)
+      : '';
+    const sub    = [city, dist].filter(Boolean).join(' · ');
+    const record = t.record != null ? fmtTime(t.record) : '';
+    const active = t.id === state.selectedId ? ' active' : '';
+
+    return `<div class="track-card${active}" data-id="${t.id}" onclick="selectTrack(${t.id})">
+      <div class="track-card-icon">🏟️</div>
+      <div class="track-card-info">
+        <div class="track-card-name">${name}</div>
+        ${sub ? `<div class="track-card-sub">${sub}</div>` : ''}
+      </div>
+      ${record ? `<div class="track-card-record">${record}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ── Track detail ───────────────────────────────────────────
+async function selectTrack(id) {
+  state.selectedId = id;
+
+  // Update active card
+  document.querySelectorAll('.track-card').forEach(el => {
+    el.classList.toggle('active', Number(el.dataset.id) === id);
+  });
+
+  // Show detail panel (mobile)
+  document.getElementById('app').classList.add('detail-open');
+  document.getElementById('detail-header').style.display = 'flex';
+  document.getElementById('detail-content').innerHTML =
+    '<div class="detail-empty"><span class="icon">⏳</span>Ladataan…</div>';
+
+  try {
+    const data = await api(`/api/tracks/${id}/records`);
+    renderDetail(data);
+  } catch {
+    document.getElementById('detail-content').innerHTML =
+      '<div class="detail-empty">Tietojen haku epäonnistui</div>';
+  }
+}
+
+function renderDetail({ track, records, personal_best }) {
+  const name = trackDisplayName(track);
+  document.getElementById('detail-title').textContent = name;
+
+  const medals = ['🥇', '🥈', '🥉'];
+
+  let recordsHtml;
+  if (records.length) {
+    const rows = records.map(r =>
+      `<tr>
+        <td>${r.rank <= 3 ? medals[r.rank - 1] : r.rank}</td>
+        <td>${esc(r.display_name)}</td>
+        <td><strong>${fmtTime(r.time_seconds)}</strong></td>
+      </tr>`
+    ).join('');
+    recordsHtml = `
+      <table class="records-table">
+        <thead><tr><th>#</th><th>Juoksija</th><th>Aika</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${personal_best != null
+        ? `<div class="personal-best">✓ Oma ennätyksesi: <strong>${fmtTime(personal_best)}</strong></div>`
+        : ''}`;
+  } else {
+    recordsHtml = '<p class="no-records">Ei tuloksia vielä — ole ensimmäinen!</p>';
+  }
+
+  const logHtml = state.user
+    ? `<form class="log-run-form" id="form-run" onsubmit="submitRun(event,${track.id})">
+        <div class="time-row">
+          <input type="number" id="run-time" step="0.01" min="30" max="600"
+                 placeholder="Aika sekunteina (esim. 62.35)" required>
+          <button type="submit" class="btn-primary" id="btn-run">Tallenna</button>
+        </div>
+        <div class="form-hint">Syötä aika sekunteina, esim. 62.35</div>
+        <div id="run-msg"></div>
+      </form>`
+    : `<p class="login-prompt">
+        <a onclick="openModal()">Kirjaudu sisään</a> kirjataksesi aikasi.
+      </p>`;
+
+  // Destroy old map before replacing DOM
+  destroyDetailMap();
+
+  document.getElementById('detail-content').innerHTML = `
+    <div id="detail-map"></div>
+    <div class="detail-section">
+      <div class="section-title">Sijainti</div>
+      <a class="btn-directions"
+         href="https://maps.google.com/?q=${track.lat},${track.lon}"
+         target="_blank" rel="noopener noreferrer">
+        📍 Avaa Google Mapsissa
+      </a>
+    </div>
+    <div class="detail-section">
+      <div class="section-title">Kenttäennätykset (400 m)</div>
+      ${recordsHtml}
+    </div>
+    <div class="detail-section">
+      <div class="section-title">Kirjaa juoksu</div>
+      ${logHtml}
+    </div>`;
+
+  // Init map after DOM update
+  requestAnimationFrame(() => initDetailMap(track.lat, track.lon, name));
+}
+
+// ── Leaflet detail map ─────────────────────────────────────
+function destroyDetailMap() {
+  if (state.detailMap) {
+    state.detailMap.remove();
+    state.detailMap   = null;
+    state.detailMarker = null;
+  }
+}
+
+function initDetailMap(lat, lon, name) {
+  const el = document.getElementById('detail-map');
+  if (!el) return;
+
+  state.detailMap = L.map('detail-map', { zoomControl: true }).setView([lat, lon], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(state.detailMap);
+
+  state.detailMarker = L.marker([lat, lon])
+    .addTo(state.detailMap)
+    .bindPopup(esc(name))
+    .openPopup();
+}
+
+// ── Log run ────────────────────────────────────────────────
+async function submitRun(e, trackId) {
+  e.preventDefault();
+  const timeInput = document.getElementById('run-time');
+  const msgEl     = document.getElementById('run-msg');
+  const btn       = document.getElementById('btn-run');
+  const secs      = parseFloat(timeInput.value);
+
+  if (isNaN(secs) || secs < 30 || secs > 600) {
+    msgEl.innerHTML = '<span class="form-error">Syötä aika sekunteina (30–600)</span>';
+    return;
+  }
+
+  btn.disabled    = true;
+  btn.textContent = 'Tallennetaan…';
+  msgEl.innerHTML = '';
+
+  try {
+    await api('/api/runs', {
+      method: 'POST',
+      body:   JSON.stringify({ track_id: trackId, time_seconds: secs }),
+    });
+    msgEl.innerHTML = '<span class="form-ok">✓ Aika kirjattu!</span>';
+    timeInput.value = '';
+    // Reload records section
+    const data = await api(`/api/tracks/${trackId}/records`);
+    renderDetail(data);
+  } catch (err) {
+    msgEl.innerHTML = `<span class="form-error">${esc(err.message)}</span>`;
+    btn.disabled    = false;
+    btn.textContent = 'Tallenna';
+  }
+}
+
+// ── Back button ────────────────────────────────────────────
+document.getElementById('btn-back').addEventListener('click', () => {
+  document.getElementById('app').classList.remove('detail-open');
+});
+
+// ── Search ─────────────────────────────────────────────────
+let searchTimer;
+document.getElementById('search-input').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    loadTracks(state.userLoc?.lat, state.userLoc?.lon, e.target.value.trim());
+  }, 300);
+});
+
+// ── Locate ─────────────────────────────────────────────────
+document.getElementById('btn-locate').addEventListener('click', () => {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(pos => {
+    state.userLoc = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    document.getElementById('search-input').value = '';
+    loadTracks(state.userLoc.lat, state.userLoc.lon, '');
+  }, () => {}, { enableHighAccuracy: true, timeout: 10000 });
+});
+
+// ── User button ────────────────────────────────────────────
+document.getElementById('btn-user').addEventListener('click', () => {
+  if (state.user) {
+    // Log out
+    state.user = null;
+    state.jwt  = null;
+    localStorage.removeItem('jwt');
+    const btn  = document.getElementById('btn-user');
+    btn.textContent = 'Kirjaudu';
+    btn.classList.remove('logged-in');
+    if (state.selectedId) selectTrack(state.selectedId);
+  } else {
+    openModal();
+  }
+});
+
+// ── Auth modal ─────────────────────────────────────────────
+function openModal() {
+  document.getElementById('modal-auth').classList.remove('hidden');
+  switchTab(state.authTab);
+}
+
+function closeModal() {
+  document.getElementById('modal-auth').classList.add('hidden');
+}
+
+document.getElementById('modal-auth').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+function switchTab(tab) {
+  state.authTab = tab;
+  document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+  document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+  document.getElementById('btn-auth-submit').textContent =
+    tab === 'login' ? 'Kirjaudu' : 'Rekisteröidy';
+
+  const body = document.getElementById('modal-body');
+  if (tab === 'login') {
+    body.innerHTML = `
+      <label>Sähköposti</label>
+      <input type="email" id="auth-email" placeholder="sinä@example.com" autocomplete="email">
+      <label>Salasana</label>
+      <input type="password" id="auth-pw" placeholder="••••••" autocomplete="current-password">
+      <div id="auth-err"></div>`;
+  } else {
+    body.innerHTML = `
+      <label>Nimi</label>
+      <input type="text" id="auth-name" placeholder="Etunimi Sukunimi" autocomplete="name">
+      <label>Sähköposti</label>
+      <input type="email" id="auth-email" placeholder="sinä@example.com" autocomplete="email">
+      <label>Salasana</label>
+      <input type="password" id="auth-pw" placeholder="Vähintään 6 merkkiä" autocomplete="new-password">
+      <div id="auth-err"></div>`;
+  }
+
+  // Allow Enter to submit
+  setTimeout(() => {
+    body.querySelectorAll('input').forEach(inp =>
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') doAuth(); })
+    );
+  }, 0);
+}
+
+document.getElementById('btn-auth-submit').addEventListener('click', doAuth);
+
+async function doAuth() {
+  const email  = document.getElementById('auth-email')?.value?.trim();
+  const pw     = document.getElementById('auth-pw')?.value;
+  const errEl  = document.getElementById('auth-err');
+  const btn    = document.getElementById('btn-auth-submit');
+
+  if (!email || !pw) {
+    errEl.innerHTML = '<span class="form-error">Täytä kaikki kentät</span>';
+    return;
+  }
+
+  const orig      = btn.textContent;
+  btn.disabled    = true;
+  btn.textContent = 'Odota…';
+
+  try {
+    let data;
+    if (state.authTab === 'login') {
+      data = await api('/api/auth/login', {
+        method: 'POST',
+        body:   JSON.stringify({ email, password: pw }),
+      });
+    } else {
+      const name = document.getElementById('auth-name')?.value?.trim();
+      if (!name) {
+        errEl.innerHTML = '<span class="form-error">Syötä nimesi</span>';
+        btn.disabled    = false;
+        btn.textContent = orig;
+        return;
+      }
+      data = await api('/api/auth/register', {
+        method: 'POST',
+        body:   JSON.stringify({ email, display_name: name, password: pw }),
       });
     }
 
-    function showResult(lat, lon, track) {
-      hideStatus();
+    state.jwt  = data.token;
+    state.user = { id: data.user_id, display_name: data.display_name };
+    localStorage.setItem('jwt', data.token);
 
-      if (userMarker) { map.removeLayer(userMarker); userMarker = null; }
-      if (trackMarker) { map.removeLayer(trackMarker); trackMarker = null; }
+    const userBtn = document.getElementById('btn-user');
+    userBtn.textContent = data.display_name;
+    userBtn.classList.add('logged-in');
 
-      userMarker = L.circleMarker([lat, lon], { radius: 8, color: '#2563eb', fillOpacity: 0.8 })
-        .addTo(map)
-        .bindPopup('Sijaintisi');
+    closeModal();
+    if (state.selectedId) selectTrack(state.selectedId);
+  } catch (err) {
+    errEl.innerHTML  = `<span class="form-error">${esc(err.message)}</span>`;
+    btn.disabled    = false;
+    btn.textContent = orig;
+  }
+}
 
-      if (track) {
-        const name = track.name || 'Urheilukenttä';
-        const dist = Math.round(track.distance_m);
-        const gpxBtnId = 'gpx-dl-' + Date.now();
-        trackMarker = L.marker([track.lat, track.lon])
-          .addTo(map)
-          .bindPopup(`<b>${name}</b><br>${dist} m päässä<br><button class="gpx-btn" id="${gpxBtnId}">Lataa GPX</button>`)
-          .openPopup();
-        trackMarker.on('popupopen', () => {
-          const btn = document.getElementById(gpxBtnId);
-          if (btn) btn.onclick = () => downloadGpx(track.lat, track.lon, name);
-        });
-        map.fitBounds([[lat, lon], [track.lat, track.lon]], { padding: [50, 50] });
+// ── Init ───────────────────────────────────────────────────
+function init() {
+  // Restore session from JWT in localStorage
+  if (state.jwt) {
+    try {
+      const payload = JSON.parse(atob(state.jwt.split('.')[1]));
+      if (payload.exp * 1000 > Date.now()) {
+        state.user = { id: payload.sub, display_name: payload.display_name };
+        const btn  = document.getElementById('btn-user');
+        btn.textContent = state.user.display_name;
+        btn.classList.add('logged-in');
       } else {
-        map.setView([lat, lon], 14);
+        state.jwt = null;
+        localStorage.removeItem('jwt');
       }
+    } catch {
+      state.jwt = null;
+      localStorage.removeItem('jwt');
     }
+  }
 
-    async function findTrack(lat, lon) {
-      showStatus('Etsitään lähintä urheilukenttää...');
-      try {
-        const res = await fetch(`/api/closest?lat=${lat}&lon=${lon}&radius=10000`);
-        const data = await res.json();
-        if (data.found && data.track) {
-          showResult(lat, lon, data.track);
-        } else {
-          showResult(lat, lon, null);
-          showStatus('Urheilukenttää ei löytynyt lähistöltä');
-        }
-      } catch (e) {
-        showResult(lat, lon, null);
-        showStatus('Virhe haettaessa urheilukenttää');
-      }
-    }
+  // Try geolocation, fall back to all tracks
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        state.userLoc = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        loadTracks(state.userLoc.lat, state.userLoc.lon, '');
+      },
+      () => loadTracks(),
+      { enableHighAccuracy: false, timeout: 8000 }
+    );
+  } else {
+    loadTracks();
+  }
+}
 
-    function parseLocation(text) {
-      const trimmed = text.trim();
-      const coordMatch = trimmed.match(/^(-?\d+\.?\d*)\s*[,;\s]\s*(-?\d+\.?\d*)$/);
-      if (coordMatch) {
-        const lat = parseFloat(coordMatch[1]);
-        const lon = parseFloat(coordMatch[2]);
-        if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-          return { lat, lon };
-        }
-      }
-      return null;
-    }
-
-    async function geocode(query) {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=fi`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.length > 0) {
-        return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-      }
-      return null;
-    }
-
-    submitBtn.addEventListener('click', handleSubmit);
-    inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSubmit(); });
-
-    async function handleSubmit() {
-      const value = inputEl.value.trim();
-      if (!value) return;
-      clearInputError();
-
-      const coords = parseLocation(value);
-      if (coords) {
-        findTrack(coords.lat, coords.lon);
-        return;
-      }
-
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'Haetaan...';
-      try {
-        const result = await geocode(value);
-        if (result) {
-          findTrack(result.lat, result.lon);
-        } else {
-          showInputError('Paikkaa ei löytynyt. Kokeile toista hakusanaa.');
-        }
-      } catch (e) {
-        showInputError('Virhe paikannuksessa. Yritä uudelleen.');
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Hae';
-      }
-    }
-
-    // Always show the map; use geolocation as default if available
-    if ('geolocation' in navigator) {
-      initMap(61.5, 24.0, 6);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = pos.coords.latitude;
-          const lon = pos.coords.longitude;
-          map.setView([lat, lon], 13);
-          findTrack(lat, lon);
-        },
-        () => { /* no-op, map already shown */ },
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    } else {
-      initMap(61.5, 24.0, 6);
-    }
-  </script>
+init();
+</script>
 </body>
 </html>
