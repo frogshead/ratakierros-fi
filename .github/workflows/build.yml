@@ -57,22 +57,31 @@ jobs:
     needs: [build-api, build-frontend]
     runs-on: ubuntu-latest
     steps:
+      - name: Setup SSH
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
       - name: Deploy to VM
-        uses: appleboy/ssh-action@v1.0.3
         env:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          envs: JWT_SECRET
-          script_stop: true
-          script: |
-            set -euo pipefail
-            cd /home/mikko/github/ratakierros-fi
-            git pull --ff-only
-            umask 077
-            printf 'JWT_SECRET=%s\n' "$JWT_SECRET" > .env
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-            docker image prune -f
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes \
+              "$SSH_USER@$SSH_HOST" 'bash -s' <<REMOTE
+          set -euo pipefail
+          cd /home/mikko/github/ratakierros-fi
+          git pull --ff-only
+          umask 077
+          printf 'JWT_SECRET=%s\n' '$JWT_SECRET' > .env
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+          docker image prune -f
+          REMOTE
