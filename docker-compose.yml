@@ -10,6 +10,11 @@ services:
     environment:
       - DATABASE_PATH=/data/ratakierros.db
       - JWT_SECRET=change-this-to-a-long-random-secret-in-production
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     image: ghcr.io/frogshead/ratakierros-fi/frontend:latest
@@ -19,6 +24,11 @@ services:
       - "8080:8000"
     environment:
       - API_BASE=http://localhost:3000
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   api-data:

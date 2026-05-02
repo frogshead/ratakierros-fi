@@ -3,6 +3,7 @@ name: Build and Push Container Images
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -51,3 +52,27 @@ jobs:
           context: .
           push: true
           tags: ${{ env.REGISTRY }}/frogshead/ratakierros-fi/frontend:latest
+
+  deploy:
+    needs: [build-api, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VM
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          envs: JWT_SECRET
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /home/mikko/github/ratakierros-fi
+            git pull --ff-only
+            umask 077
+            printf 'JWT_SECRET=%s\n' "$JWT_SECRET" > .env
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            docker image prune -f

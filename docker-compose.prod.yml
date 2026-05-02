@@ -1,0 +1,12 @@
+services:
+  api:
+    ports: !override
+      - "127.0.0.1:3001:3000"
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - DATABASE_PATH=/data/ratakierros.db
+  frontend:
+    ports: !override
+      - "127.0.0.1:8081:8000"
+    environment:
+      - API_BASE=https://ratakierros.fi
