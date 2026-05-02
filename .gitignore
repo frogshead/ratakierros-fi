@@ -1,3 +1,5 @@
 api/target/
 .env
 *.swp
+*.db-shm
+*.db-wal
