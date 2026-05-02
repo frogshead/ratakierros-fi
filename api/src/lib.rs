@@ -11,6 +11,9 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+pub mod lipas;
+pub use lipas::fetch_and_cache_lipas_tracks;
+
 pub type Db = Arc<Mutex<Connection>>;
 
 // --- Types ---
@@ -18,12 +21,19 @@ pub type Db = Arc<Mutex<Connection>>;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Track {
     pub id: i64,
-    pub osm_id: String,
+    pub lipas_id: i64,
     pub name: Option<String>,
     pub lat: f64,
     pub lon: f64,
     pub city: Option<String>,
     pub suburb: Option<String>,
+    pub address: Option<String>,
+    pub postal_code: Option<String>,
+    pub surface: Option<String>,
+    pub track_length_m: Option<i64>,
+    pub lanes: Option<i64>,
+    pub status: String,
+    pub type_code: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +66,10 @@ pub struct Claims {
     pub display_name: String,
 }
 
+const TRACK_COLUMNS: &str =
+    "t.id, t.lipas_id, t.name, t.lat, t.lon, t.city, t.suburb, t.address, t.postal_code, \
+     t.surface, t.track_length_m, t.lanes, t.status, t.type_code";
+
 // --- Database ---
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -64,14 +78,26 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
          PRAGMA foreign_keys=ON;
 
          CREATE TABLE IF NOT EXISTS tracks (
-             id      INTEGER PRIMARY KEY AUTOINCREMENT,
-             osm_id  TEXT UNIQUE NOT NULL,
-             name    TEXT,
-             lat     REAL NOT NULL,
-             lon     REAL NOT NULL,
-             city    TEXT,
-             suburb  TEXT
+             id               INTEGER PRIMARY KEY AUTOINCREMENT,
+             lipas_id         INTEGER UNIQUE NOT NULL,
+             name             TEXT,
+             lat              REAL NOT NULL,
+             lon              REAL NOT NULL,
+             type_code        INTEGER NOT NULL,
+             status           TEXT NOT NULL,
+             address          TEXT,
+             postal_code      TEXT,
+             city             TEXT,
+             suburb           TEXT,
+             surface          TEXT,
+             track_length_m   INTEGER,
+             lanes            INTEGER,
+             geometry_geojson TEXT,
+             last_synced_at   TEXT NOT NULL
          );
+
+         CREATE INDEX IF NOT EXISTS idx_tracks_city ON tracks(city);
+         CREATE INDEX IF NOT EXISTS idx_tracks_type_status ON tracks(type_code, status);
 
          CREATE TABLE IF NOT EXISTS users (
              id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,121 +117,160 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+// Move legacy `tracks` (osm_id-keyed) out of the way before init_db creates the new schema.
+// The legacy rows are needed later by `finalize_legacy_migration` to remap runs.track_id.
+// MUST run before init_db().
 pub fn migrate_db(conn: &Connection) {
-    // Add suburb column if upgrading from older schema
-    conn.execute_batch("ALTER TABLE tracks ADD COLUMN suburb TEXT").ok();
+    if column_exists(conn, "tracks", "osm_id") && !column_exists(conn, "tracks", "lipas_id") {
+        // foreign_keys=OFF during the rename prevents SQLite from auto-redirecting
+        // `runs.track_id` FK to `tracks_legacy`. We want it to keep referencing the
+        // literal name `tracks`, which init_db re-creates immediately after with the
+        // new schema. legacy_alter_table=ON keeps trigger/view defs intact too.
+        // Recover from a prior interrupted migration: tracks_legacy may already exist.
+        conn.execute_batch(
+            "PRAGMA foreign_keys=OFF; \
+             PRAGMA legacy_alter_table=ON; \
+             DROP TABLE IF EXISTS tracks_legacy; \
+             ALTER TABLE tracks RENAME TO tracks_legacy; \
+             PRAGMA legacy_alter_table=OFF; \
+             PRAGMA foreign_keys=ON;",
+        )
+        .expect("Failed to rename legacy tracks table");
+        println!("Migration: renamed legacy tracks → tracks_legacy");
+    }
 }
 
-// Merge tracks that are within 400 m of each other (same venue, different OSM objects).
-// Keeps the richest metadata and re-points any existing runs to the surviving track.
-// Returns the number of tracks removed.
-pub fn deduplicate_nearby_tracks(db: &Db) -> usize {
-    let conn = db.lock().unwrap();
-
-    type TrackRow = (i64, Option<String>, f64, f64, Option<String>, Option<String>);
-
-    let all: Vec<TrackRow> = {
-        let mut stmt = match conn.prepare(
-            "SELECT id, name, lat, lon, city, suburb FROM tracks ORDER BY id",
-        ) {
-            Ok(s) => s,
-            Err(_) => return 0,
-        };
-        let rows: Vec<TrackRow> = match stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
-        }) {
-            Ok(mapped) => mapped.filter_map(|r| r.ok()).collect(),
-            Err(_) => return 0,
-        };
-        rows
+fn column_exists(conn: &Connection, table: &str, col: &str) -> bool {
+    let sql = format!("PRAGMA table_info({})", table);
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(_) => return false,
     };
-
-    let n = all.len();
-    if n == 0 { return 0; }
-
-    // Union-Find (iterative, path-halving)
-    let mut parent: Vec<usize> = (0..n).collect();
-    let mut find = |parent: &mut Vec<usize>, mut i: usize| -> usize {
-        while parent[i] != i {
-            parent[i] = parent[parent[i]];
-            i = parent[i];
-        }
-        i
-    };
-
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let (_, _, lat1, lon1, _, _) = all[i];
-            let (_, _, lat2, lon2, _, _) = all[j];
-            let dist = Point::new(lon1, lat1).haversine_distance(&Point::new(lon2, lat2));
-            if dist <= 400.0 {
-                let ri = find(&mut parent, i);
-                let rj = find(&mut parent, j);
-                if ri != rj {
-                    parent[ri] = rj;
-                }
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1));
+    if let Ok(rows) = rows {
+        for r in rows.flatten() {
+            if r == col {
+                return true;
             }
         }
     }
+    false
+}
 
-    // Resolve all roots (path compression)
-    let roots: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
+fn table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?1",
+        params![table],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
 
-    // Group indices by root
-    let mut clusters: std::collections::HashMap<usize, Vec<usize>> =
-        std::collections::HashMap::new();
-    for (i, &root) in roots.iter().enumerate() {
-        clusters.entry(root).or_default().push(i);
+// After a successful Lipas fetch, remap runs.track_id from legacy ids to new ids.
+// Strategy: nearest new track within 400 m. Orphans get a synthetic placeholder row
+// (negative lipas_id, status='legacy') so run history is never lost.
+// Returns (remapped, orphaned). No-op if no legacy table exists.
+pub fn finalize_legacy_migration(db: &Db) -> Result<(usize, usize), String> {
+    let conn = db.lock().unwrap();
+    if !table_exists(&conn, "tracks_legacy") {
+        return Ok((0, 0));
     }
 
-    let mut removed = 0;
+    type LegacyRow = (i64, Option<String>, f64, f64, Option<String>, Option<String>);
+    let legacy: Vec<LegacyRow> = {
+        let mut stmt = conn
+            .prepare("SELECT id, name, lat, lon, city, suburb FROM tracks_legacy")
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<LegacyRow> = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        collected
+    };
 
-    for members in clusters.values().filter(|m| m.len() > 1) {
-        // Canonical: prefer track with a name; fall back to first
-        let canonical_idx = members
-            .iter()
-            .copied()
-            .find(|&i| all[i].1.is_some())
-            .unwrap_or(members[0]);
-        let canonical_id = all[canonical_idx].0;
+    let new_tracks: Vec<(i64, f64, f64)> = {
+        let mut stmt = conn
+            .prepare("SELECT id, lat, lon FROM tracks")
+            .map_err(|e| e.to_string())?;
+        let collected: Vec<(i64, f64, f64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        collected
+    };
 
-        // Best metadata across all cluster members
-        let best_name = members
-            .iter()
-            .filter_map(|&i| all[i].1.as_deref())
-            .max_by_key(|s| s.len())
-            .map(String::from);
-        let best_city = members
-            .iter()
-            .filter_map(|&i| all[i].4.as_deref())
-            .next()
-            .map(String::from);
-        let best_suburb = members
-            .iter()
-            .filter_map(|&i| all[i].5.as_deref())
-            .next()
-            .map(String::from);
+    let mut remapped = 0usize;
+    let mut orphaned = 0usize;
+    let now = Utc::now().to_rfc3339();
+
+    for (old_id, name, lat, lon, city, suburb) in &legacy {
+        // Skip legacy tracks with no run history — they were just OSM noise, no need
+        // to preserve them as placeholder rows in the new tracks table.
+        let run_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM runs WHERE track_id = ?1",
+                params![*old_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if run_count == 0 {
+            continue;
+        }
+
+        let mut best: Option<(i64, f64)> = None;
+        for &(nid, nlat, nlon) in &new_tracks {
+            let d = Point::new(*lon, *lat).haversine_distance(&Point::new(nlon, nlat));
+            if d <= 400.0 && best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((nid, d));
+            }
+        }
+
+        let new_id = match best {
+            Some((nid, _)) => {
+                remapped += 1;
+                nid
+            }
+            None => {
+                let synthetic = -*old_id;
+                conn.execute(
+                    "INSERT OR IGNORE INTO tracks \
+                     (lipas_id, name, lat, lon, type_code, status, city, suburb, last_synced_at) \
+                     VALUES (?1, ?2, ?3, ?4, 0, 'legacy', ?5, ?6, ?7)",
+                    params![synthetic, name, lat, lon, city, suburb, now],
+                )
+                .map_err(|e| e.to_string())?;
+                let nid: i64 = conn
+                    .query_row(
+                        "SELECT id FROM tracks WHERE lipas_id = ?1",
+                        params![synthetic],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+                orphaned += 1;
+                nid
+            }
+        };
 
         conn.execute(
-            "UPDATE tracks SET name = ?1, city = ?2, suburb = ?3 WHERE id = ?4",
-            params![best_name, best_city, best_suburb, canonical_id],
+            "UPDATE runs SET track_id = ?1 WHERE track_id = ?2",
+            params![new_id, *old_id],
         )
-        .ok();
-
-        for &i in members.iter().filter(|&&i| i != canonical_idx) {
-            let dup_id = all[i].0;
-            // Re-point runs so we don't lose history
-            conn.execute(
-                "UPDATE runs SET track_id = ?1 WHERE track_id = ?2",
-                params![canonical_id, dup_id],
-            )
-            .ok();
-            conn.execute("DELETE FROM tracks WHERE id = ?1", params![dup_id]).ok();
-            removed += 1;
-        }
+        .map_err(|e| e.to_string())?;
     }
 
-    removed
+    conn.execute_batch("DROP TABLE tracks_legacy")
+        .map_err(|e| e.to_string())?;
+
+    println!(
+        "Migration finalized: {} legacy tracks with runs matched to Lipas, \
+         {} orphan placeholders preserved (legacy tracks without runs were dropped)",
+        remapped, orphaned
+    );
+    Ok((remapped, orphaned))
 }
 
 pub fn tracks_count(db: &Db) -> i64 {
@@ -214,183 +279,28 @@ pub fn tracks_count(db: &Db) -> i64 {
         .unwrap_or(0)
 }
 
-// --- Track cache ---
-
-pub async fn fetch_and_cache_tracks(db: Db) -> Result<usize, String> {
-    // Finland bounding box: S 59.7, W 19.1, N 70.1, E 31.6
-    let query = concat!(
-        "[out:json][timeout:180];",
-        r#"area["ISO3166-1"="FI"][admin_level=2]->.fi;"#,
-        "(",
-        r#"node["sport"="athletics"](area.fi);"#,
-        r#"way["sport"="athletics"](area.fi);"#,
-        r#"relation["sport"="athletics"](area.fi);"#,
-        r#"node["name"~"yleisurheilukent",i](area.fi);"#,
-        r#"way["name"~"yleisurheilukent",i](area.fi);"#,
-        r#"relation["name"~"yleisurheilukent",i](area.fi);"#,
-        ");",
-        "out center tags;"
-    );
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(210))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
-
-    let endpoints = [
-        "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-    ];
-
-    let mut last_err = String::new();
-    let mut body_opt: Option<String> = None;
-
-    for endpoint in &endpoints {
-        let result = client
-            .post(*endpoint)
-            .header("User-Agent", "ratakierros-fi/1.0 (https://ratakierros.fi)")
-            .form(&[("data", query)])
-            .send()
-            .await;
-
-        match result {
-            Err(e) => { last_err = format!("Request to {} failed: {}", endpoint, e); }
-            Ok(response) => {
-                let status = response.status();
-                let body = response.text().await
-                    .map_err(|e| format!("Failed to read response: {}", e))?;
-                if status.is_success() {
-                    body_opt = Some(body);
-                    break;
-                }
-                last_err = format!("Overpass {} returned HTTP {}: {}", endpoint, status, &body[..body.len().min(200)]);
-            }
-        }
-    }
-
-    let body = body_opt.ok_or(last_err)?;
-
-    let data: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse Overpass response ({}): body starts with: {}", e, &body[..body.len().min(200)]))?;
-
-    let elements = match data["elements"].as_array() {
-        Some(e) => e,
-        None => return Err("No elements in Overpass response".to_string()),
-    };
-
-    let conn = db.lock().unwrap();
-    let mut count = 0;
-
-    for element in elements {
-        let (lat, lon) = if element["type"] == "node" {
-            (element["lat"].as_f64(), element["lon"].as_f64())
-        } else if let Some(center) = element.get("center") {
-            (center["lat"].as_f64(), center["lon"].as_f64())
-        } else {
-            continue;
-        };
-
-        let (lat, lon) = match (lat, lon) {
-            (Some(la), Some(lo)) if la != 0.0 || lo != 0.0 => (la, lo),
-            _ => continue,
-        };
-
-        let osm_type = element["type"].as_str().unwrap_or("node");
-        let osm_id = format!("{}/{}", osm_type, element["id"].as_i64().unwrap_or(0));
-
-        let tags = &element["tags"];
-        let name = tags["name"].as_str().map(String::from);
-        let city = tags["addr:city"]
-            .as_str()
-            .or_else(|| tags["addr:municipality"].as_str())
-            .or_else(|| tags["is_in:city"].as_str())
-            .map(String::from);
-
-        conn.execute(
-            "INSERT OR REPLACE INTO tracks (osm_id, name, lat, lon, city) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![osm_id, name, lat, lon, city],
-        )
-        .ok();
-
-        count += 1;
-    }
-
-    Ok(count)
-}
-
-// Enrich tracks missing a city via Nominatim reverse geocode.
-// Nominatim public API: max 1 req/s. Runs as a background task after fetch.
-pub async fn enrich_missing_cities(db: Db) {
-    let missing: Vec<(i64, f64, f64)> = {
-        let conn = db.lock().unwrap();
-        let mut stmt = match conn.prepare("SELECT id, lat, lon FROM tracks WHERE city IS NULL") {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let rows: Vec<(i64, f64, f64)> = match stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        {
-            Ok(mapped) => mapped.filter_map(|r| r.ok()).collect(),
-            Err(_) => return,
-        };
-        rows
-    };
-
-    let total = missing.len();
-    if total == 0 { return; }
-    println!("Enriching {} tracks without city via Nominatim...", total);
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    for (i, (id, lat, lon)) in missing.into_iter().enumerate() {
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-
-        let url = format!(
-            "https://nominatim.openstreetmap.org/reverse?lat={}&lon={}&format=json",
-            lat, lon
-        );
-
-        let resp = match client.get(&url).header("User-Agent", "ratakierros-fi/1.0").send().await {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let data: serde_json::Value = match resp.json().await {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-
-        let addr = &data["address"];
-        let city = ["city", "town", "municipality", "village", "county"]
-            .iter()
-            .find_map(|k| addr[k].as_str().map(String::from));
-        let suburb = ["suburb", "village", "hamlet", "quarter", "city_district"]
-            .iter()
-            .find_map(|k| addr[k].as_str().map(String::from))
-            .filter(|s| Some(s) != city.as_ref()); // skip if same as city
-
-        if city.is_some() || suburb.is_some() {
-            let conn = db.lock().unwrap();
-            conn.execute(
-                "UPDATE tracks SET city = ?1, suburb = ?2 WHERE id = ?3",
-                params![city, suburb, id],
-            ).ok();
-        }
-
-        if (i + 1) % 10 == 0 || i + 1 == total {
-            println!("Nominatim enrichment: {}/{}", i + 1, total);
-        }
-    }
-
-    println!("Nominatim enrichment complete.");
-}
-
 // --- Track queries ---
+
+fn row_to_track(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Track> {
+    Ok(Track {
+        id: row.get(0)?,
+        lipas_id: row.get(1)?,
+        name: row.get(2)?,
+        lat: row.get(3)?,
+        lon: row.get(4)?,
+        city: row.get(5)?,
+        suburb: row.get(6)?,
+        address: row.get(7)?,
+        postal_code: row.get(8)?,
+        surface: row.get(9)?,
+        track_length_m: row.get(10)?,
+        lanes: row.get(11)?,
+        status: row.get(12)?,
+        type_code: row.get(13)?,
+    })
+}
 
 pub fn list_tracks(
     db: &Db,
@@ -400,56 +310,52 @@ pub fn list_tracks(
 ) -> Result<Vec<TrackWithDistance>, String> {
     let conn = db.lock().unwrap();
 
-    type Row = (i64, String, Option<String>, f64, f64, Option<String>, Option<String>, Option<f64>);
-
-    let rows: Vec<Row> = if let Some(q_str) = q.filter(|s| !s.is_empty()) {
-        let pattern = format!("%{}%", q_str);
-        let mut stmt = conn
-            .prepare(
-                "SELECT t.id, t.osm_id, t.name, t.lat, t.lon, t.city, t.suburb, MIN(r.time_seconds) \
-                 FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
-                 WHERE LOWER(t.name) LIKE LOWER(?1) OR LOWER(t.city) LIKE LOWER(?1) \
-                    OR LOWER(t.suburb) LIKE LOWER(?1) \
-                 GROUP BY t.id ORDER BY t.name",
+    let (sql, params_vec): (String, Vec<rusqlite::types::Value>) =
+        if let Some(q_str) = q.filter(|s| !s.is_empty()) {
+            let pattern = format!("%{}%", q_str);
+            (
+                format!(
+                    "SELECT {}, MIN(r.time_seconds) \
+                     FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
+                     WHERE LOWER(t.name) LIKE LOWER(?1) OR LOWER(t.city) LIKE LOWER(?1) \
+                        OR LOWER(t.suburb) LIKE LOWER(?1) \
+                     GROUP BY t.id ORDER BY t.name",
+                    TRACK_COLUMNS
+                ),
+                vec![pattern.into()],
             )
-            .map_err(|e| e.to_string())?;
-        let collected: Vec<Row> = stmt
-            .query_map(params![pattern], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        collected
-    } else {
-        let mut stmt = conn
-            .prepare(
-                "SELECT t.id, t.osm_id, t.name, t.lat, t.lon, t.city, t.suburb, MIN(r.time_seconds) \
-                 FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
-                 GROUP BY t.id ORDER BY t.name",
+        } else {
+            (
+                format!(
+                    "SELECT {}, MIN(r.time_seconds) \
+                     FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
+                     GROUP BY t.id ORDER BY t.name",
+                    TRACK_COLUMNS
+                ),
+                vec![],
             )
-            .map_err(|e| e.to_string())?;
-        let collected: Vec<Row> = stmt
-            .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))
-            })
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect();
-        collected
-    };
+        };
 
-    let mut result: Vec<TrackWithDistance> = rows
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        params_vec.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let tracks: Vec<(Track, Option<f64>)> = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            let track = row_to_track(row)?;
+            let record: Option<f64> = row.get(14)?;
+            Ok((track, record))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut result: Vec<TrackWithDistance> = tracks
         .into_iter()
-        .map(|(id, osm_id, name, tlat, tlon, city, suburb, record)| {
+        .map(|(track, record)| {
             let distance_m = lat.zip(lon).map(|(ulat, ulon)| {
-                Point::new(ulon, ulat).haversine_distance(&Point::new(tlon, tlat))
+                Point::new(ulon, ulat).haversine_distance(&Point::new(track.lon, track.lat))
             });
-            TrackWithDistance {
-                track: Track { id, osm_id, name, lat: tlat, lon: tlon, city, suburb },
-                distance_m,
-                record,
-            }
+            TrackWithDistance { track, distance_m, record }
         })
         .collect();
 
@@ -467,31 +373,20 @@ pub fn list_tracks(
 
 pub fn get_track(db: &Db, id: i64) -> Result<Option<TrackWithDistance>, String> {
     let conn = db.lock().unwrap();
-    let result = conn.query_row(
-        "SELECT t.id, t.osm_id, t.name, t.lat, t.lon, t.city, t.suburb, MIN(r.time_seconds) \
+    let sql = format!(
+        "SELECT {}, MIN(r.time_seconds) \
          FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
          WHERE t.id = ?1 GROUP BY t.id",
-        params![id],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, f64>(3)?,
-                row.get::<_, f64>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<f64>>(7)?,
-            ))
-        },
+        TRACK_COLUMNS
     );
+    let result = conn.query_row(&sql, params![id], |row| {
+        let track = row_to_track(row)?;
+        let record: Option<f64> = row.get(14)?;
+        Ok((track, record))
+    });
 
     match result {
-        Ok((id, osm_id, name, lat, lon, city, suburb, record)) => Ok(Some(TrackWithDistance {
-            track: Track { id, osm_id, name, lat, lon, city, suburb },
-            distance_m: None,
-            record,
-        })),
+        Ok((track, record)) => Ok(Some(TrackWithDistance { track, distance_m: None, record })),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
@@ -506,22 +401,12 @@ pub fn get_records(
 ) -> Result<TrackRecords, String> {
     let conn = db.lock().unwrap();
 
+    let sql = format!(
+        "SELECT {} FROM tracks t WHERE t.id = ?1",
+        TRACK_COLUMNS
+    );
     let track = conn
-        .query_row(
-            "SELECT id, osm_id, name, lat, lon, city, suburb FROM tracks WHERE id = ?1",
-            params![track_id],
-            |row| {
-                Ok(Track {
-                    id: row.get(0)?,
-                    osm_id: row.get(1)?,
-                    name: row.get(2)?,
-                    lat: row.get(3)?,
-                    lon: row.get(4)?,
-                    city: row.get(5)?,
-                    suburb: row.get(6)?,
-                })
-            },
-        )
+        .query_row(&sql, params![track_id], row_to_track)
         .map_err(|e| e.to_string())?;
 
     let mut stmt = conn
@@ -650,4 +535,152 @@ pub fn verify_jwt(token: &str) -> Result<Claims, String> {
 fn jwt_secret() -> String {
     std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "ratakierros-dev-secret-change-in-prod".to_string())
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    fn open_legacy_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tracks (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 osm_id TEXT UNIQUE NOT NULL,
+                 name TEXT,
+                 lat REAL NOT NULL,
+                 lon REAL NOT NULL,
+                 city TEXT,
+                 suburb TEXT
+             );
+             CREATE TABLE users (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 email TEXT UNIQUE NOT NULL,
+                 display_name TEXT NOT NULL,
+                 password_hash TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+             CREATE TABLE runs (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 user_id INTEGER NOT NULL REFERENCES users(id),
+                 track_id INTEGER NOT NULL REFERENCES tracks(id),
+                 time_seconds REAL NOT NULL,
+                 logged_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn legacy_run_is_remapped_to_nearby_new_track() {
+        let conn = open_legacy_db();
+        // Legacy track at Helsinki Olympiastadion-ish coords.
+        conn.execute(
+            "INSERT INTO tracks (osm_id, name, lat, lon, city) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params!["way/1", "Olympiastadion", 60.1875, 24.9275, "Helsinki"],
+        )
+        .unwrap();
+        let old_track_id: i64 = conn
+            .query_row("SELECT id FROM tracks WHERE osm_id = 'way/1'", [], |r| r.get(0))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO users (email, display_name, password_hash, created_at) VALUES \
+             ('a@b.c', 'A', 'h', '2024-01-01')",
+            [],
+        )
+        .unwrap();
+        let user_id: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO runs (user_id, track_id, time_seconds, logged_at) VALUES (?1, ?2, 65.5, '2024-01-01')",
+            params![user_id, old_track_id],
+        )
+        .unwrap();
+
+        migrate_db(&conn);
+        init_db(&conn).unwrap();
+
+        // Simulate Lipas fetch: insert a new track within 400 m of the legacy one.
+        conn.execute(
+            "INSERT INTO tracks (lipas_id, name, lat, lon, type_code, status, last_synced_at) \
+             VALUES (501, 'Olympiastadion (Lipas)', 60.1880, 24.9270, 1220, 'active', '2026-05-02')",
+            [],
+        )
+        .unwrap();
+        let new_track_id: i64 = conn
+            .query_row("SELECT id FROM tracks WHERE lipas_id = 501", [], |r| r.get(0))
+            .unwrap();
+
+        let db: Db = Arc::new(Mutex::new(conn));
+        let (remapped, orphaned) = finalize_legacy_migration(&db).unwrap();
+        assert_eq!(remapped, 1);
+        assert_eq!(orphaned, 0);
+
+        let conn = db.lock().unwrap();
+        let mapped: i64 = conn
+            .query_row("SELECT track_id FROM runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mapped, new_track_id);
+        // tracks_legacy is dropped after finalize.
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracks_legacy'",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+        assert!(!exists);
+    }
+
+    #[test]
+    fn legacy_run_with_no_nearby_match_becomes_orphan_placeholder() {
+        let conn = open_legacy_db();
+        conn.execute(
+            "INSERT INTO tracks (osm_id, name, lat, lon, city) VALUES \
+             ('way/9', 'Erämaakenttä', 67.9, 25.5, 'Inari')",
+            [],
+        )
+        .unwrap();
+        let old_track_id: i64 = conn
+            .query_row("SELECT id FROM tracks WHERE osm_id = 'way/9'", [], |r| r.get(0))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO users (email, display_name, password_hash, created_at) VALUES \
+             ('a@b.c', 'A', 'h', '2024-01-01')",
+            [],
+        )
+        .unwrap();
+        let user_id: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO runs (user_id, track_id, time_seconds, logged_at) VALUES (?1, ?2, 90.0, '2024-01-01')",
+            params![user_id, old_track_id],
+        )
+        .unwrap();
+
+        migrate_db(&conn);
+        init_db(&conn).unwrap();
+
+        // No nearby Lipas track — only one far away.
+        conn.execute(
+            "INSERT INTO tracks (lipas_id, name, lat, lon, type_code, status, last_synced_at) \
+             VALUES (700, 'Helsinki', 60.18, 24.93, 1220, 'active', '2026-05-02')",
+            [],
+        )
+        .unwrap();
+
+        let db: Db = Arc::new(Mutex::new(conn));
+        let (remapped, orphaned) = finalize_legacy_migration(&db).unwrap();
+        assert_eq!(remapped, 0);
+        assert_eq!(orphaned, 1);
+
+        let conn = db.lock().unwrap();
+        // Run still has a valid (non-zero) track_id pointing at the orphan placeholder.
+        let mapped: i64 = conn
+            .query_row("SELECT track_id FROM runs", [], |r| r.get(0))
+            .unwrap();
+        let placeholder_status: String = conn
+            .query_row("SELECT status FROM tracks WHERE id = ?1", params![mapped], |r| r.get(0))
+            .unwrap();
+        assert_eq!(placeholder_status, "legacy");
+    }
 }

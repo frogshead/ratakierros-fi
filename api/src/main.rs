@@ -11,9 +11,8 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 
 use ratakierros_api::{
-    deduplicate_nearby_tracks, enrich_missing_cities, fetch_and_cache_tracks, get_records,
-    get_track, list_tracks, log_run, login_user, migrate_db, register_user, tracks_count,
-    verify_jwt, Claims, Db,
+    fetch_and_cache_lipas_tracks, finalize_legacy_migration, get_records, get_track, list_tracks,
+    log_run, login_user, migrate_db, register_user, tracks_count, verify_jwt, Claims, Db,
 };
 
 // --- Error type ---
@@ -203,10 +202,15 @@ async fn login_handler(
 }
 
 async fn refresh_tracks_handler(Extension(db): Extension<Db>) -> impl IntoResponse {
-    match fetch_and_cache_tracks(db.clone()).await {
+    match fetch_and_cache_lipas_tracks(db.clone()).await {
         Ok(n) => {
-            let merged = deduplicate_nearby_tracks(&db);
-            Json(serde_json::json!({ "fetched": n, "merged": merged })).into_response()
+            let (remapped, orphaned) = finalize_legacy_migration(&db).unwrap_or((0, 0));
+            Json(serde_json::json!({
+                "fetched": n,
+                "remapped_runs": remapped,
+                "orphaned_tracks": orphaned,
+            }))
+            .into_response()
         }
         Err(e) => AppError::Internal(e).into_response(),
     }
@@ -220,37 +224,46 @@ async fn main() {
         std::env::var("DATABASE_PATH").unwrap_or_else(|_| "ratakierros.db".to_string());
 
     let conn = rusqlite::Connection::open(&db_path).expect("Failed to open database");
-    ratakierros_api::init_db(&conn).expect("Failed to initialize database");
+    // migrate_db must run before init_db so legacy `tracks` is renamed before the new
+    // schema is created.
     migrate_db(&conn);
+    ratakierros_api::init_db(&conn).expect("Failed to initialize database");
 
     let db: Db = Arc::new(Mutex::new(conn));
 
-    if tracks_count(&db) == 0 {
-        println!("Track database empty — fetching from Overpass API...");
+    let needs_lipas_seed = tracks_count(&db) == 0 || {
+        let c = db.lock().unwrap();
+        c.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracks_legacy'",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok()
+    };
+
+    if needs_lipas_seed {
+        println!("Fetching tracks from Lipas API v2...");
         let db_clone = db.clone();
         tokio::spawn(async move {
-            match fetch_and_cache_tracks(db_clone.clone()).await {
+            match fetch_and_cache_lipas_tracks(db_clone.clone()).await {
                 Ok(n) => {
-                    println!("Fetched and cached {} tracks", n);
-                    let merged = deduplicate_nearby_tracks(&db_clone);
-                    if merged > 0 { println!("Merged {} duplicate nearby tracks", merged); }
-                    enrich_missing_cities(db_clone).await;
+                    println!("Fetched and cached {} tracks from Lipas", n);
+                    match finalize_legacy_migration(&db_clone) {
+                        Ok((remapped, orphaned)) if remapped > 0 || orphaned > 0 => {
+                            println!(
+                                "Legacy migration: {} runs rehomed onto Lipas tracks, \
+                                 {} orphan tracks preserved (had runs but no Lipas match)",
+                                remapped, orphaned
+                            );
+                        }
+                        _ => {}
+                    }
                 }
-                Err(e) => eprintln!("Track fetch failed: {}", e),
+                Err(e) => eprintln!("Lipas fetch failed: {}", e),
             }
         });
     } else {
         println!("Loaded {} tracks from database", tracks_count(&db));
-        let missing_count = {
-            let conn = db.lock().unwrap();
-            conn.query_row("SELECT COUNT(*) FROM tracks WHERE city IS NULL", [], |r| r.get::<_, i64>(0))
-                .unwrap_or(0)
-        };
-        if missing_count > 0 {
-            println!("{} tracks missing city — running Nominatim enrichment...", missing_count);
-            let db_clone = db.clone();
-            tokio::spawn(enrich_missing_cities(db_clone));
-        }
     }
 
     let app = Router::new()
