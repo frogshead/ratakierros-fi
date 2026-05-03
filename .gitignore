@@ -3,3 +3,12 @@ api/target/
 *.swp
 *.db-shm
 *.db-wal
+
+# iOS
+ios/Ratakierros.xcodeproj/
+ios/Generated/
+ios/build/
+ios/DerivedData/
+ios/.swiftpm/
+ios/.build/
+**/.DS_Store
