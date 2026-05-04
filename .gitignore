@@ -3,3 +3,16 @@ api/target/
 *.swp
 *.db-shm
 *.db-wal
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+android/captures/
+android/gradle/wrapper/gradle-wrapper.jar
+android/gradlew
+android/gradlew.bat
+**/.DS_Store
