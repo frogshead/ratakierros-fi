@@ -4,6 +4,13 @@ api/target/
 *.db-shm
 *.db-wal
 
+# iOS
+ios/Ratakierros.xcodeproj/
+ios/Generated/
+ios/build/
+ios/DerivedData/
+ios/.swiftpm/
+ios/.build/
 # Android
 android/.gradle/
 android/build/
