@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use axum::{
-    extract::{Extension, FromRequestParts, Multipart, Path, Query},
+    extract::{DefaultBodyLimit, Extension, FromRequestParts, Multipart, Path, Query},
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -315,7 +315,10 @@ async fn main() {
         .route("/api/runs", post(log_run_handler))
         .route("/api/auth/register", post(register_handler))
         .route("/api/auth/login", post(login_handler))
-        .route("/api/gpx/analyze", post(gpx_analyze_handler))
+        .route(
+            "/api/gpx/analyze",
+            post(gpx_analyze_handler).layer(DefaultBodyLimit::max(10 * 1024 * 1024)),
+        )
         .route("/api/admin/refresh-tracks", post(refresh_tracks_handler))
         .layer(Extension(db))
         .layer(CorsLayer::permissive());
