@@ -11,7 +11,9 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+pub mod gpx_analyze;
 pub mod lipas;
+pub use gpx_analyze::{analyze_gpx, AnalyzeError, AnalyzeResult, BestLap, TraceSummary, DEFAULT_TARGET_DISTANCE_M};
 pub use lipas::fetch_and_cache_lipas_tracks;
 
 pub type Db = Arc<Mutex<Connection>>;

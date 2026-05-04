@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use axum::{
-    extract::{Extension, FromRequestParts, Path, Query},
+    extract::{Extension, FromRequestParts, Multipart, Path, Query},
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 
 use ratakierros_api::{
-    fetch_and_cache_lipas_tracks, finalize_legacy_migration, get_records, get_track, list_tracks,
-    log_run, login_user, migrate_db, register_user, tracks_count, verify_jwt, Claims, Db,
+    analyze_gpx, fetch_and_cache_lipas_tracks, finalize_legacy_migration, get_records, get_track,
+    list_tracks, log_run, login_user, migrate_db, register_user, tracks_count, verify_jwt,
+    AnalyzeError, Claims, Db, DEFAULT_TARGET_DISTANCE_M,
 };
 
 // --- Error type ---
@@ -201,6 +202,46 @@ async fn login_handler(
     }
 }
 
+async fn gpx_analyze_handler(
+    Query(params): Query<GpxAnalyzeParams>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut gpx_bytes: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("multipart-virhe: {}", e)))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" || name == "gpx" {
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("tiedostoa ei voitu lukea: {}", e)))?;
+            gpx_bytes = Some(data.to_vec());
+        }
+    }
+    let bytes = gpx_bytes
+        .ok_or_else(|| AppError::BadRequest("kentta 'file' puuttuu pyynnosta".to_string()))?;
+    let gpx_str = std::str::from_utf8(&bytes)
+        .map_err(|_| AppError::BadRequest("GPX ei ole UTF-8".to_string()))?;
+    let target = params.distance_m.unwrap_or(DEFAULT_TARGET_DISTANCE_M);
+    if !target.is_finite() || target <= 0.0 {
+        return Err(AppError::BadRequest("distance_m taytyy olla > 0".into()));
+    }
+    let result = analyze_gpx(gpx_str, target).map_err(map_analyze_error)?;
+    Ok(Json(serde_json::to_value(result).unwrap()))
+}
+
+fn map_analyze_error(e: AnalyzeError) -> AppError {
+    AppError::BadRequest(e.to_string())
+}
+
+#[derive(Deserialize)]
+struct GpxAnalyzeParams {
+    distance_m: Option<f64>,
+}
+
 async fn refresh_tracks_handler(Extension(db): Extension<Db>) -> impl IntoResponse {
     match fetch_and_cache_lipas_tracks(db.clone()).await {
         Ok(n) => {
@@ -274,6 +315,7 @@ async fn main() {
         .route("/api/runs", post(log_run_handler))
         .route("/api/auth/register", post(register_handler))
         .route("/api/auth/login", post(login_handler))
+        .route("/api/gpx/analyze", post(gpx_analyze_handler))
         .route("/api/admin/refresh-tracks", post(refresh_tracks_handler))
         .layer(Extension(db))
         .layer(CorsLayer::permissive());
