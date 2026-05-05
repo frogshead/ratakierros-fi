@@ -44,6 +44,7 @@ pub struct TrackWithDistance {
     pub track: Track,
     pub distance_m: Option<f64>,
     pub record: Option<f64>,
+    pub is_favorite: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,6 +116,14 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
              track_id     INTEGER NOT NULL REFERENCES tracks(id),
              time_seconds REAL NOT NULL,
              logged_at    TEXT NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS favorites (
+             id         INTEGER PRIMARY KEY AUTOINCREMENT,
+             user_id    INTEGER NOT NULL REFERENCES users(id),
+             track_id   INTEGER NOT NULL REFERENCES tracks(id),
+             created_at TEXT NOT NULL,
+             UNIQUE(user_id, track_id)
          );",
     )
 }
@@ -309,43 +318,56 @@ pub fn list_tracks(
     lat: Option<f64>,
     lon: Option<f64>,
     q: Option<&str>,
+    user_id: Option<i64>,
 ) -> Result<Vec<TrackWithDistance>, String> {
     let conn = db.lock().unwrap();
+
+    let user_param: rusqlite::types::Value = match user_id {
+        Some(uid) => uid.into(),
+        None => rusqlite::types::Value::Null,
+    };
 
     let (sql, params_vec): (String, Vec<rusqlite::types::Value>) =
         if let Some(q_str) = q.filter(|s| !s.is_empty()) {
             let pattern = format!("%{}%", q_str);
             (
                 format!(
-                    "SELECT {}, MIN(r.time_seconds) \
-                     FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
-                     WHERE LOWER(t.name) LIKE LOWER(?1) OR LOWER(t.city) LIKE LOWER(?1) \
-                        OR LOWER(t.suburb) LIKE LOWER(?1) \
+                    "SELECT {}, MIN(r.time_seconds), \
+                            MAX(CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END) \
+                     FROM tracks t \
+                     LEFT JOIN runs r ON r.track_id = t.id \
+                     LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = ?1 \
+                     WHERE LOWER(t.name) LIKE LOWER(?2) OR LOWER(t.city) LIKE LOWER(?2) \
+                        OR LOWER(t.suburb) LIKE LOWER(?2) \
                      GROUP BY t.id ORDER BY t.name",
                     TRACK_COLUMNS
                 ),
-                vec![pattern.into()],
+                vec![user_param, pattern.into()],
             )
         } else {
             (
                 format!(
-                    "SELECT {}, MIN(r.time_seconds) \
-                     FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
+                    "SELECT {}, MIN(r.time_seconds), \
+                            MAX(CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END) \
+                     FROM tracks t \
+                     LEFT JOIN runs r ON r.track_id = t.id \
+                     LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = ?1 \
                      GROUP BY t.id ORDER BY t.name",
                     TRACK_COLUMNS
                 ),
-                vec![],
+                vec![user_param],
             )
         };
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let params_refs: Vec<&dyn rusqlite::ToSql> =
         params_vec.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
-    let tracks: Vec<(Track, Option<f64>)> = stmt
+    let tracks: Vec<(Track, Option<f64>, bool)> = stmt
         .query_map(params_refs.as_slice(), |row| {
             let track = row_to_track(row)?;
             let record: Option<f64> = row.get(14)?;
-            Ok((track, record))
+            let is_favorite: i64 = row.get(15)?;
+            Ok((track, record, is_favorite != 0))
         })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
@@ -353,42 +375,69 @@ pub fn list_tracks(
 
     let mut result: Vec<TrackWithDistance> = tracks
         .into_iter()
-        .map(|(track, record)| {
+        .map(|(track, record, is_favorite)| {
             let distance_m = lat.zip(lon).map(|(ulat, ulon)| {
                 Point::new(ulon, ulat).haversine_distance(&Point::new(track.lon, track.lat))
             });
-            TrackWithDistance { track, distance_m, record }
+            TrackWithDistance { track, distance_m, record, is_favorite }
         })
         .collect();
 
-    if lat.is_some() {
-        result.sort_by(|a, b| match (a.distance_m, b.distance_m) {
-            (Some(da), Some(db)) => da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.track.name.cmp(&b.track.name),
-        });
-    }
+    // Favorites bubble to the top; within each group, sort by distance (when known)
+    // or fall back to the SQL-provided name order.
+    result.sort_by(|a, b| {
+        b.is_favorite.cmp(&a.is_favorite).then_with(|| {
+            if lat.is_some() {
+                match (a.distance_m, b.distance_m) {
+                    (Some(da), Some(db)) => {
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.track.name.cmp(&b.track.name),
+                }
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+    });
 
     Ok(result)
 }
 
-pub fn get_track(db: &Db, id: i64) -> Result<Option<TrackWithDistance>, String> {
+pub fn get_track(
+    db: &Db,
+    id: i64,
+    user_id: Option<i64>,
+) -> Result<Option<TrackWithDistance>, String> {
     let conn = db.lock().unwrap();
+    let user_param: rusqlite::types::Value = match user_id {
+        Some(uid) => uid.into(),
+        None => rusqlite::types::Value::Null,
+    };
     let sql = format!(
-        "SELECT {}, MIN(r.time_seconds) \
-         FROM tracks t LEFT JOIN runs r ON r.track_id = t.id \
-         WHERE t.id = ?1 GROUP BY t.id",
+        "SELECT {}, MIN(r.time_seconds), \
+                MAX(CASE WHEN f.id IS NOT NULL THEN 1 ELSE 0 END) \
+         FROM tracks t \
+         LEFT JOIN runs r ON r.track_id = t.id \
+         LEFT JOIN favorites f ON f.track_id = t.id AND f.user_id = ?1 \
+         WHERE t.id = ?2 GROUP BY t.id",
         TRACK_COLUMNS
     );
-    let result = conn.query_row(&sql, params![id], |row| {
+    let result = conn.query_row(&sql, params![user_param, id], |row| {
         let track = row_to_track(row)?;
         let record: Option<f64> = row.get(14)?;
-        Ok((track, record))
+        let is_favorite: i64 = row.get(15)?;
+        Ok((track, record, is_favorite != 0))
     });
 
     match result {
-        Ok((track, record)) => Ok(Some(TrackWithDistance { track, distance_m: None, record })),
+        Ok((track, record, is_favorite)) => Ok(Some(TrackWithDistance {
+            track,
+            distance_m: None,
+            record,
+            is_favorite,
+        })),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
@@ -455,6 +504,29 @@ pub fn log_run(db: &Db, user_id: i64, track_id: i64, time_seconds: f64) -> Resul
     conn.execute(
         "INSERT INTO runs (user_id, track_id, time_seconds, logged_at) VALUES (?1, ?2, ?3, ?4)",
         params![user_id, track_id, time_seconds, Utc::now().to_rfc3339()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// --- Favorites ---
+
+pub fn add_favorite(db: &Db, user_id: i64, track_id: i64) -> Result<(), String> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO favorites (user_id, track_id, created_at) \
+         VALUES (?1, ?2, ?3)",
+        params![user_id, track_id, Utc::now().to_rfc3339()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn remove_favorite(db: &Db, user_id: i64, track_id: i64) -> Result<(), String> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "DELETE FROM favorites WHERE user_id = ?1 AND track_id = ?2",
+        params![user_id, track_id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -684,5 +756,106 @@ mod migration_tests {
             .query_row("SELECT status FROM tracks WHERE id = ?1", params![mapped], |r| r.get(0))
             .unwrap();
         assert_eq!(placeholder_status, "legacy");
+    }
+}
+
+#[cfg(test)]
+mod favorites_tests {
+    use super::*;
+
+    fn setup() -> (Db, i64, i64, i64) {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO users (email, display_name, password_hash, created_at) \
+             VALUES ('u@e.c', 'U', 'h', '2026-05-05')",
+            [],
+        )
+        .unwrap();
+        let user_id = conn.last_insert_rowid();
+        // Track A — favorited; Track B — not.
+        conn.execute(
+            "INSERT INTO tracks (lipas_id, name, lat, lon, type_code, status, last_synced_at) \
+             VALUES (1, 'A-rata', 60.0, 24.0, 1220, 'active', '2026-05-05')",
+            [],
+        )
+        .unwrap();
+        let track_a = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tracks (lipas_id, name, lat, lon, type_code, status, last_synced_at) \
+             VALUES (2, 'B-rata', 60.1, 24.1, 1220, 'active', '2026-05-05')",
+            [],
+        )
+        .unwrap();
+        let track_b = conn.last_insert_rowid();
+        let db: Db = Arc::new(Mutex::new(conn));
+        (db, user_id, track_a, track_b)
+    }
+
+    #[test]
+    fn add_favorite_is_idempotent() {
+        let (db, user_id, track_a, _) = setup();
+        add_favorite(&db, user_id, track_a).unwrap();
+        add_favorite(&db, user_id, track_a).unwrap();
+        let count: i64 = db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM favorites WHERE user_id = ?1 AND track_id = ?2",
+                params![user_id, track_a],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn remove_favorite_is_noop_when_not_favorited() {
+        let (db, user_id, track_a, _) = setup();
+        // No favorite yet — must not error.
+        remove_favorite(&db, user_id, track_a).unwrap();
+        let count: i64 = db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM favorites", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn list_tracks_marks_and_orders_favorites_first_when_user_logged_in() {
+        let (db, user_id, _track_a, track_b) = setup();
+        // Favorite the *second* track (B-rata) so it must surface above the alphabetically-
+        // earlier A-rata when the user is logged in.
+        add_favorite(&db, user_id, track_b).unwrap();
+
+        let result = list_tracks(&db, None, None, None, Some(user_id)).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].track.id, track_b);
+        assert!(result[0].is_favorite);
+        assert!(!result[1].is_favorite);
+    }
+
+    #[test]
+    fn list_tracks_returns_is_favorite_false_when_no_user() {
+        let (db, user_id, _track_a, track_b) = setup();
+        add_favorite(&db, user_id, track_b).unwrap();
+
+        let result = list_tracks(&db, None, None, None, None).unwrap();
+        assert!(result.iter().all(|t| !t.is_favorite));
+        // With no user, fall back to the SQL-provided alphabetical order: A before B.
+        assert_eq!(result[0].track.name.as_deref(), Some("A-rata"));
+    }
+
+    #[test]
+    fn get_track_returns_is_favorite_for_logged_in_user() {
+        let (db, user_id, track_a, _track_b) = setup();
+        add_favorite(&db, user_id, track_a).unwrap();
+
+        let with_user = get_track(&db, track_a, Some(user_id)).unwrap().unwrap();
+        assert!(with_user.is_favorite);
+
+        let without_user = get_track(&db, track_a, None).unwrap().unwrap();
+        assert!(!without_user.is_favorite);
     }
 }
