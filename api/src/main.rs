@@ -122,8 +122,12 @@ struct AuthResponse {
 
 // --- Handlers ---
 
-async fn health_handler() -> &'static str {
-    "ok"
+async fn health_handler() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": ratakierros_api::BUILD_VERSION,
+        "commit": ratakierros_api::BUILD_COMMIT,
+    }))
 }
 
 async fn tracks_handler(

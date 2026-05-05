@@ -153,6 +153,17 @@
       font-size: 0.9rem;
     }
 
+    .app-version {
+      padding: 0.4rem 0.875rem;
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-align: right;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .app-version:empty { display: none; }
+
     .track-card {
       padding: 0.75rem 1rem;
       border-bottom: 1px solid var(--border);
@@ -481,6 +492,7 @@
     <div class="track-list" id="track-list">
       <div class="track-list-msg">Haetaan kenttiä…</div>
     </div>
+    <div class="app-version" id="app-version" title="Käytössä oleva sovellusversio"></div>
   </div>
 
   <!-- ── Main / detail ──────────────────────────────────── -->
@@ -905,6 +917,13 @@ async function doAuth() {
 
 // ── Init ───────────────────────────────────────────────────
 function init() {
+  // Show build identifier in the sidebar corner. Empty string in local dev hides
+  // the element (`.app-version:empty { display: none }`), so this is a no-op
+  // until the Docker build injects a real GIT_COMMIT.
+  const version = (window.APP_VERSION || '').slice(0, 7);
+  const verEl = document.getElementById('app-version');
+  if (verEl && version) verEl.textContent = `#${version}`;
+
   // Restore session from JWT in localStorage
   if (state.jwt) {
     try {

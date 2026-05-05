@@ -18,6 +18,22 @@ pub use lipas::fetch_and_cache_lipas_tracks;
 
 pub type Db = Arc<Mutex<Connection>>;
 
+pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_COMMIT: &str = env!("GIT_COMMIT");
+
+#[cfg(test)]
+mod build_info_tests {
+    use super::*;
+
+    #[test]
+    fn build_consts_are_populated() {
+        assert!(!BUILD_VERSION.is_empty());
+        assert!(!BUILD_COMMIT.is_empty());
+        // build.rs truncates to 7 chars; "unknown" is the local-dev fallback.
+        assert!(BUILD_COMMIT.len() <= 7);
+    }
+}
+
 // --- Types ---
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

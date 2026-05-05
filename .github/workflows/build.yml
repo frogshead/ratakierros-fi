@@ -30,6 +30,8 @@ jobs:
           context: ./api
           push: true
           tags: ${{ env.REGISTRY }}/frogshead/ratakierros-fi/api:latest
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
 
   build-frontend:
     runs-on: ubuntu-latest
@@ -52,6 +54,8 @@ jobs:
           context: .
           push: true
           tags: ${{ env.REGISTRY }}/frogshead/ratakierros-fi/frontend:latest
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
 
   deploy:
     needs: [build-api, build-frontend]
