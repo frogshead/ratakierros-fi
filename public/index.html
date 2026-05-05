@@ -203,6 +203,11 @@
       flex-shrink: 0;
     }
 
+    .track-card-fav {
+      color: #f59e0b;
+      font-size: 0.9rem;
+    }
+
     /* ── Detail panel ────────────────────────────────────── */
     .detail-header {
       padding: 0.75rem 1rem;
@@ -223,6 +228,21 @@
       flex-shrink: 0;
     }
     .btn-back:hover { background: var(--bg); }
+
+    .btn-fav {
+      padding: 0.25rem 0.55rem;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 1.1rem;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      color: var(--muted);
+    }
+    .btn-fav:hover { background: var(--bg); }
+    .btn-fav.active { color: #f59e0b; border-color: #f59e0b; }
+    .btn-fav:disabled { opacity: 0.5; cursor: wait; }
 
     .detail-title {
       font-size: 0.95rem;
@@ -488,6 +508,7 @@
     <div class="detail-header" id="detail-header" style="display:none">
       <button class="btn-back" id="btn-back">← Takaisin</button>
       <span class="detail-title" id="detail-title"></span>
+      <button class="btn-fav" id="btn-fav" type="button" hidden>☆</button>
     </div>
     <div class="detail-content" id="detail-content">
       <div class="detail-empty">
@@ -599,10 +620,14 @@ function renderList(tracks) {
     const record = t.record != null ? fmtTime(t.record) : '';
     const active = t.id === state.selectedId ? ' active' : '';
 
+    const fav = t.is_favorite
+      ? '<span class="track-card-fav" title="Suosikki" aria-label="Suosikki">★</span> '
+      : '';
+
     return `<div class="track-card${active}" data-id="${t.id}" onclick="selectTrack(${t.id})">
       <div class="track-card-icon">🏟️</div>
       <div class="track-card-info">
-        <div class="track-card-name">${name}</div>
+        <div class="track-card-name">${fav}${name}</div>
         ${sub ? `<div class="track-card-sub">${sub}</div>` : ''}
       </div>
       ${record ? `<div class="track-card-record">${record}</div>` : ''}
@@ -637,6 +662,20 @@ async function selectTrack(id) {
 function renderDetail({ track, records, personal_best }) {
   const name = trackDisplayName(track);
   document.getElementById('detail-title').textContent = name;
+
+  // Favorite button: only meaningful when logged in. is_favorite comes from the
+  // cached list response (state.tracks); the records endpoint doesn't include it.
+  const favBtn = document.getElementById('btn-fav');
+  if (state.user) {
+    const cached = state.tracks.find(t => t.id === track.id);
+    favBtn.hidden = false;
+    favBtn.disabled = false;
+    favBtn.onclick = () => toggleFavorite(track.id);
+    updateFavButton(cached?.is_favorite ?? false);
+  } else {
+    favBtn.hidden = true;
+    favBtn.onclick = null;
+  }
 
   const medals = ['🥇', '🥈', '🥉'];
 
@@ -726,6 +765,37 @@ function initDetailMap(lat, lon, name) {
     .openPopup();
 }
 
+// ── Favorites ──────────────────────────────────────────────
+function updateFavButton(isFav) {
+  const favBtn = document.getElementById('btn-fav');
+  if (!favBtn) return;
+  favBtn.textContent = isFav ? '★' : '☆';
+  favBtn.classList.toggle('active', isFav);
+  const label = isFav ? 'Poista suosikeista' : 'Lisää suosikiksi';
+  favBtn.title = label;
+  favBtn.setAttribute('aria-label', label);
+}
+
+async function toggleFavorite(trackId) {
+  if (!state.user) return;
+  const cached = state.tracks.find(t => t.id === trackId);
+  const wasFav = cached?.is_favorite ?? false;
+  const favBtn = document.getElementById('btn-fav');
+  favBtn.disabled = true;
+  try {
+    await api(`/api/favorites/${trackId}`, { method: wasFav ? 'DELETE' : 'POST' });
+    if (cached) cached.is_favorite = !wasFav;
+    updateFavButton(!wasFav);
+    // Refresh list ordering from the server (favorites bubble to the top there).
+    const q = document.getElementById('search-input').value.trim();
+    loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
+  } catch (err) {
+    console.error('Suosikin tallennus epäonnistui:', err);
+  } finally {
+    favBtn.disabled = false;
+  }
+}
+
 // ── Log run ────────────────────────────────────────────────
 async function submitRun(e, trackId) {
   e.preventDefault();
@@ -794,6 +864,9 @@ document.getElementById('btn-user').addEventListener('click', () => {
     const btn  = document.getElementById('btn-user');
     btn.textContent = 'Kirjaudu';
     btn.classList.remove('logged-in');
+    // Reload list so is_favorite is cleared everywhere; refresh detail too.
+    const q = document.getElementById('search-input').value.trim();
+    loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
     if (state.selectedId) selectTrack(state.selectedId);
   } else {
     openModal();
@@ -895,6 +968,9 @@ async function doAuth() {
     userBtn.classList.add('logged-in');
 
     closeModal();
+    // Reload list so is_favorite reflects this user; refresh detail too.
+    const q = document.getElementById('search-input').value.trim();
+    loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
     if (state.selectedId) selectTrack(state.selectedId);
   } catch (err) {
     errEl.innerHTML  = `<span class="form-error">${esc(err.message)}</span>`;

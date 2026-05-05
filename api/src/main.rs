@@ -11,9 +11,10 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 
 use ratakierros_api::{
-    analyze_gpx, fetch_and_cache_lipas_tracks, finalize_legacy_migration, get_records, get_track,
-    list_tracks, log_run, login_user, migrate_db, register_user, tracks_count, verify_jwt,
-    AnalyzeError, Claims, Db, DEFAULT_TARGET_DISTANCE_M,
+    add_favorite, analyze_gpx, fetch_and_cache_lipas_tracks, finalize_legacy_migration,
+    get_records, get_track, list_tracks, log_run, login_user, migrate_db, register_user,
+    remove_favorite, tracks_count, verify_jwt, AnalyzeError, Claims, Db,
+    DEFAULT_TARGET_DISTANCE_M,
 };
 
 // --- Error type ---
@@ -129,8 +130,9 @@ async fn health_handler() -> &'static str {
 async fn tracks_handler(
     Extension(db): Extension<Db>,
     Query(params): Query<TracksQuery>,
+    OptionalAuthUser(user_id): OptionalAuthUser,
 ) -> impl IntoResponse {
-    match list_tracks(&db, params.lat, params.lon, params.q.as_deref()) {
+    match list_tracks(&db, params.lat, params.lon, params.q.as_deref(), user_id) {
         Ok(tracks) => Json(tracks).into_response(),
         Err(e) => AppError::Internal(e).into_response(),
     }
@@ -139,10 +141,33 @@ async fn tracks_handler(
 async fn track_handler(
     Extension(db): Extension<Db>,
     Path(id): Path<i64>,
+    OptionalAuthUser(user_id): OptionalAuthUser,
 ) -> impl IntoResponse {
-    match get_track(&db, id) {
+    match get_track(&db, id, user_id) {
         Ok(Some(track)) => Json(track).into_response(),
         Ok(None) => AppError::NotFound.into_response(),
+        Err(e) => AppError::Internal(e).into_response(),
+    }
+}
+
+async fn add_favorite_handler(
+    Extension(db): Extension<Db>,
+    AuthUser(user_id): AuthUser,
+    Path(track_id): Path<i64>,
+) -> impl IntoResponse {
+    match add_favorite(&db, user_id, track_id) {
+        Ok(()) => (StatusCode::CREATED, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) => AppError::Internal(e).into_response(),
+    }
+}
+
+async fn remove_favorite_handler(
+    Extension(db): Extension<Db>,
+    AuthUser(user_id): AuthUser,
+    Path(track_id): Path<i64>,
+) -> impl IntoResponse {
+    match remove_favorite(&db, user_id, track_id) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
         Err(e) => AppError::Internal(e).into_response(),
     }
 }
@@ -313,6 +338,10 @@ async fn main() {
         .route("/api/tracks/:id", get(track_handler))
         .route("/api/tracks/:id/records", get(records_handler))
         .route("/api/runs", post(log_run_handler))
+        .route(
+            "/api/favorites/:track_id",
+            post(add_favorite_handler).delete(remove_favorite_handler),
+        )
         .route("/api/auth/register", post(register_handler))
         .route("/api/auth/login", post(login_handler))
         .route("/api/gpx/analyze", post(gpx_analyze_handler))
