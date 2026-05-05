@@ -111,7 +111,6 @@
     /* ── Search bar ──────────────────────────────────────── */
     .search-bar {
       padding: 0.625rem 0.875rem;
-      border-bottom: 1px solid var(--border);
       display: flex;
       gap: 0.5rem;
       flex-shrink: 0;
@@ -138,6 +137,14 @@
       line-height: 1;
     }
     .btn-locate:hover { background: #e5e7eb; }
+
+    .search-help {
+      padding: 0 0.875rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
 
     /* ── Track list ──────────────────────────────────────── */
     .track-list {
@@ -476,8 +483,9 @@
     </div>
     <div class="search-bar">
       <input type="search" id="search-input" placeholder="Hae nimellä tai paikkakunnalla…" autocomplete="off">
-      <button class="btn-locate" id="btn-locate" title="Näytä lähistön kentät">📍</button>
+      <button class="btn-locate" id="btn-locate" title="Näytä lähistön kentät" aria-label="Näytä lähistön kentät">📍</button>
     </div>
+    <div class="search-help">📍 = näytä lähistön kentät</div>
     <div class="track-list" id="track-list">
       <div class="track-list-msg">Haetaan kenttiä…</div>
     </div>
