@@ -1,5 +1,7 @@
 FROM denoland/deno:latest
 WORKDIR /app
+ARG GIT_COMMIT=unknown
+ENV APP_VERSION=$GIT_COMMIT
 COPY ratakierros-fi.ts .
 COPY public/ public/
 EXPOSE 8000

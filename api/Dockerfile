@@ -1,7 +1,9 @@
 FROM rust:1.88-slim AS builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y pkg-config libssl-dev build-essential && rm -rf /var/lib/apt/lists/*
-COPY Cargo.toml Cargo.lock* ./
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+COPY Cargo.toml Cargo.lock* build.rs ./
 COPY src/ src/
 RUN cargo build --release
 
