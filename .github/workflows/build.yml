@@ -53,8 +53,74 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/frogshead/ratakierros-fi/frontend:latest
 
-  deploy:
+  audit-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        working-directory: api
+        run: cargo audit
+
+  scan-images:
     needs: [build-api, build-frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ghcr.io/frogshead/ratakierros-fi/api:latest
+          - ghcr.io/frogshead/ratakierros-fi/frontend:latest
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan image with Grype
+        uses: anchore/scan-action@v3
+        with:
+          image: ${{ matrix.image }}
+          fail-build: true
+          severity-cutoff: high
+
+  sbom:
+    needs: [build-api, build-frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ghcr.io/frogshead/ratakierros-fi/api:latest
+            artifact: sbom-api
+          - image: ghcr.io/frogshead/ratakierros-fi/frontend:latest
+            artifact: sbom-frontend
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ matrix.image }}
+          format: cyclonedx-json
+          artifact-name: ${{ matrix.artifact }}.cyclonedx.json
+          upload-artifact: true
+          upload-artifact-retention: 90
+
+  deploy:
+    needs: [build-api, build-frontend, audit-api, scan-images, sbom]
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH
