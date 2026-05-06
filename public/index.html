@@ -408,6 +408,59 @@
     .form-error { font-size: 0.8rem;  color: var(--red); }
     .form-ok    { font-size: 0.8rem;  color: var(--green); }
 
+    /* ── GPX upload ──────────────────────────────────────── */
+    .gpx-upload {
+      margin-top: 0.75rem;
+      border-top: 1px dashed var(--border);
+      padding-top: 0.75rem;
+    }
+    .gpx-upload summary {
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: var(--muted);
+      list-style: none;
+      padding: 0.25rem 0;
+    }
+    .gpx-upload summary::-webkit-details-marker { display: none; }
+    .gpx-upload summary:hover { color: var(--blue); }
+    .gpx-upload[open] summary { color: var(--blue); margin-bottom: 0.5rem; }
+    .gpx-upload-row {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .gpx-upload-row input[type="file"] {
+      flex: 1;
+      min-width: 0;
+      font-size: 0.8rem;
+    }
+    .gpx-result-card {
+      margin-top: 0.5rem;
+      padding: 0.6rem 0.75rem;
+      background: var(--green-bg);
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: var(--green);
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .gpx-result-card .gpx-meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .gpx-result-card button {
+      align-self: flex-start;
+      padding: 0.3rem 0.7rem;
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
     .login-prompt {
       font-size: 0.875rem;
       color: var(--muted);
@@ -729,6 +782,15 @@ function renderDetail({ track, records, personal_best }) {
         </div>
         <div class="form-hint">Syötä aika sekunteina, esim. 62.35</div>
         <div id="run-msg"></div>
+        <details class="gpx-upload">
+          <summary>📁 Tuo aika GPX-tiedostosta</summary>
+          <div class="gpx-upload-row">
+            <input type="file" id="gpx-file" accept=".gpx,application/gpx+xml,text/xml">
+            <button type="button" class="btn-primary" id="btn-analyze-gpx" onclick="analyzeGpx()">Analysoi</button>
+          </div>
+          <div class="form-hint">Etsii nopeimman 400 m:n osuuden GPS-jäljestä.</div>
+          <div id="gpx-result"></div>
+        </details>
       </form>`
     : `<p class="login-prompt">
         <a onclick="openModal()">Kirjaudu sisään</a> kirjataksesi aikasi.
@@ -848,6 +910,57 @@ async function submitRun(e, trackId) {
     btn.disabled    = false;
     btn.textContent = 'Tallenna';
   }
+}
+
+// ── GPX upload ────────────────────────────────────────────
+async function analyzeGpx() {
+  const fileInput = document.getElementById('gpx-file');
+  const resultEl  = document.getElementById('gpx-result');
+  const btn       = document.getElementById('btn-analyze-gpx');
+
+  if (!fileInput || !fileInput.files.length) {
+    resultEl.innerHTML = '<span class="form-error">Valitse GPX-tiedosto.</span>';
+    return;
+  }
+
+  const file = fileInput.files[0];
+  const fd   = new FormData();
+  fd.append('file', file);
+
+  btn.disabled    = true;
+  btn.textContent = 'Analysoidaan…';
+  resultEl.innerHTML = '';
+
+  try {
+    const base = (window.API_BASE || '').replace(/\/$/, '');
+    const res  = await fetch(base + '/api/gpx/analyze', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Palvelinvirhe');
+
+    const t       = data.best_lap.time_seconds;
+    const start   = new Date(data.best_lap.start_time);
+    const dateStr = start.toLocaleString('fi-FI', { dateStyle: 'short', timeStyle: 'short' });
+    const totalKm = (data.trace.total_distance_m / 1000).toFixed(2);
+
+    resultEl.innerHTML = `
+      <div class="gpx-result-card">
+        <div>Paras 400 m: <strong>${fmtTime(t)}</strong> (${t.toFixed(2)} s)</div>
+        <div class="gpx-meta">${esc(dateStr)} alkaen · jäljen kokonaispituus ${totalKm} km</div>
+        <button type="button" onclick="useGpxTime(${t.toFixed(2)})">Käytä tätä aikaa</button>
+      </div>`;
+  } catch (err) {
+    resultEl.innerHTML = `<span class="form-error">${esc(err.message)}</span>`;
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = 'Analysoi';
+  }
+}
+
+function useGpxTime(secs) {
+  const input = document.getElementById('run-time');
+  if (!input) return;
+  input.value = secs;
+  input.focus();
 }
 
 // ── Back button ────────────────────────────────────────────
