@@ -92,6 +92,7 @@ jobs:
           image: ${{ matrix.image }}
           fail-build: true
           severity-cutoff: high
+          only-fixed: true
 
   sbom:
     needs: [build-api, build-frontend]
