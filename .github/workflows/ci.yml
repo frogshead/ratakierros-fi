@@ -37,3 +37,77 @@ jobs:
           context: .
           push: false
           build-args: GIT_COMMIT=${{ github.sha }}
+
+  e2e:
+    needs: [api, docker]
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_FILES: -f docker-compose.yml -f e2e/docker-compose.e2e.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images
+        run: docker compose ${COMPOSE_FILES} build --build-arg GIT_COMMIT=${{ github.sha }}
+
+      - name: Seed SQLite fixture (sidecar, before api starts)
+        run: docker compose ${COMPOSE_FILES} run --rm seed-sidecar
+
+      - name: Bring up stack
+        run: docker compose ${COMPOSE_FILES} up -d api frontend nginx
+
+      - name: Wait for /api/health (via nginx)
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            if curl -sSf http://localhost:8080/api/health >/dev/null 2>&1; then
+              echo "api ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "api never became healthy" >&2
+          docker compose ${COMPOSE_FILES} ps
+          docker compose ${COMPOSE_FILES} logs --no-color
+          exit 1
+
+      - name: Install jq (smoke deps)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Run smoke tests
+        run: bash e2e/smoke.sh
+
+      - name: Setup Node (for Playwright)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright deps
+        working-directory: e2e/playwright
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: e2e/playwright
+        run: npx playwright test
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          mkdir -p e2e-logs
+          docker compose ${COMPOSE_FILES} ps > e2e-logs/ps.txt || true
+          docker compose ${COMPOSE_FILES} logs --no-color > e2e-logs/compose.log || true
+
+      - name: Upload e2e diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ github.run_id }}
+          path: |
+            e2e-logs/
+            e2e/playwright/test-results/
+            e2e/playwright/playwright-report/
+
+      - name: Tear down
+        if: always()
+        run: docker compose ${COMPOSE_FILES} down -v

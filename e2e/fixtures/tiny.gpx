@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="ratakierros-e2e" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><name>e2e fixture</name><trkseg>
+    <trkpt lat="0.0" lon="0.0"><time>2026-05-08T12:00:00Z</time></trkpt>
+    <trkpt lat="0.0" lon="0.0017985517"><time>2026-05-08T12:00:50Z</time></trkpt>
+    <trkpt lat="0.0" lon="0.0035971034"><time>2026-05-08T12:01:40Z</time></trkpt>
+    <trkpt lat="0.0" lon="0.0053956551"><time>2026-05-08T12:02:30Z</time></trkpt>
+    <trkpt lat="0.0" lon="0.0071942068"><time>2026-05-08T12:03:20Z</time></trkpt>
+  </trkseg></trk>
+</gpx>

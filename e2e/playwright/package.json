@@ -1,0 +1,12 @@
+{
+  "name": "ratakierros-e2e-playwright",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Browser-driven e2e tests for ratakierros-fi",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
