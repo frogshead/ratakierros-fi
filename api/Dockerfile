@@ -7,7 +7,7 @@ COPY Cargo.toml Cargo.lock* build.rs ./
 COPY src/ src/
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /data
 COPY --from=builder /app/target/release/ratakierros-api /usr/local/bin/
