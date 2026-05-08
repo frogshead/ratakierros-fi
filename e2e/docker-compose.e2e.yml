@@ -1,0 +1,44 @@
+# Overlay for end-to-end tests. Use with the root compose file:
+#
+#   docker compose -f docker-compose.yml -f e2e/docker-compose.e2e.yml ...
+#
+# - Adds an nginx reverse proxy on :8080 mirroring the production setup so the
+#   browser → nginx → api/frontend path is exercised.
+# - Overrides frontend.API_BASE so window.API_BASE points at nginx (same-origin),
+#   matching prod. Direct :3000 stays exposed so the smoke layer can also hit
+#   the api cross-origin and verify the CORS preflight (the 744b2ff regression).
+# - seed-sidecar runs once via `docker compose run` before the stack is brought
+#   up. It writes the schema + fixture rows into the api-data volume so the
+#   API skips the Lipas auto-fetch (tracks_count > 0 in main.rs:304).
+
+services:
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+      - frontend
+
+  frontend:
+    # Drop the base mapping so nginx can bind 8080. nginx still reaches the
+    # frontend via the internal compose network.
+    ports: !override []
+    environment:
+      - API_BASE=http://localhost:8080
+
+  seed-sidecar:
+    image: alpine:3.20
+    profiles: ["seed"]
+    user: "0:0"
+    volumes:
+      - api-data:/data
+      - ./e2e/seed.sql:/seed/seed.sql:ro
+    entrypoint: ["sh", "-c"]
+    # Install sqlite, apply schema + fixture rows. Idempotent (CREATE IF NOT
+    # EXISTS + INSERT OR REPLACE) so re-running is safe.
+    command:
+      - "apk add --no-cache sqlite >/dev/null && sqlite3 /data/ratakierros.db < /seed/seed.sql && echo 'seed applied'"

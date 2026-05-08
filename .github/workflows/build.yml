@@ -1,21 +1,33 @@
 name: Build and Push Container Images
 
+# Gate publish/deploy on a green CI run (which now includes e2e). This prevents
+# the 744b2ff scenario — a runtime-broken image being published because cargo
+# tests stayed green while the actual browser ↔ API integration was broken.
+# workflow_dispatch is preserved for ad-hoc rebuilds.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
+  # Build/checkout the exact commit CI signed off on. workflow_run carries the
+  # source sha out-of-band; for manual dispatch fall back to the dispatched ref.
+  TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   build-api:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -31,15 +43,18 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/frogshead/ratakierros-fi/api:latest
           build-args: |
-            GIT_COMMIT=${{ github.sha }}
+            GIT_COMMIT=${{ env.TARGET_SHA }}
 
   build-frontend:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
 
       - name: Log in to Container Registry
         uses: docker/login-action@v3
@@ -55,12 +70,15 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/frogshead/ratakierros-fi/frontend:latest
           build-args: |
-            GIT_COMMIT=${{ github.sha }}
+            GIT_COMMIT=${{ env.TARGET_SHA }}
 
   audit-api:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
