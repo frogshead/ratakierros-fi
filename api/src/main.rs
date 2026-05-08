@@ -337,7 +337,7 @@ async fn main() {
     }
 
     let app = Router::new()
-        .route("/health", get(health_handler))
+        .route("/api/health", get(health_handler))
         .route("/api/tracks", get(tracks_handler))
         .route("/api/tracks/:id", get(track_handler))
         .route("/api/tracks/:id/records", get(records_handler))
