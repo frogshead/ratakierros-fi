@@ -162,12 +162,15 @@ preflight=$(curl -sS -i -X OPTIONS "${API_BASE}/api/tracks" \
   -H 'Origin: http://localhost:8000' \
   -H 'Access-Control-Request-Method: GET' \
   -H 'Access-Control-Request-Headers: authorization,content-type')
-status_line=$(echo "$preflight" | head -n1)
-echo "$status_line" | grep -qE 'HTTP/[0-9.]+ (200|204)' \
+# NOTE: use here-strings, not `echo … | grep -q`. Under `set -o pipefail`,
+# `grep -q` closes the pipe as soon as it matches, sending SIGPIPE to echo
+# and tripping pipefail. Locally the timing usually wins; CI exposes the race.
+status_line=$(head -n1 <<< "$preflight")
+grep -qE 'HTTP/[0-9.]+ (200|204)' <<< "$status_line" \
   || fail "CORS preflight expected 200/204, got: $status_line"
-echo "$preflight" | grep -qi '^access-control-allow-origin:' \
+grep -qi '^access-control-allow-origin:' <<< "$preflight" \
   || fail "CORS preflight missing access-control-allow-origin header.\nFull response:\n$preflight"
-echo "$preflight" | grep -qi '^access-control-allow-methods:' \
+grep -qi '^access-control-allow-methods:' <<< "$preflight" \
   || fail "CORS preflight missing access-control-allow-methods header"
 pass "OPTIONS /api/tracks (CORS preflight) → headers present"
 
@@ -192,7 +195,7 @@ fi
 # 13. Frontend served via nginx
 # ---------------------------------------------------------------------------
 html=$(curl_json "${NGINX_BASE}/")
-echo "$html" | grep -q 'window.API_BASE' \
+[[ "$html" == *"window.API_BASE"* ]] \
   || fail "frontend HTML missing injected window.API_BASE"
 pass "GET / → frontend HTML with API_BASE injected"
 
