@@ -23,4 +23,4 @@ async-trait = "0.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-hyper = { version = "0.14", features = ["full"] }
+hyper = { version = "1.9", features = ["full"] }
