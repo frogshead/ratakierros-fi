@@ -22,5 +22,5 @@ time = "0.3"
 async-trait = "0.1"
 
 [dev-dependencies]
-tower = { version = "0.4", features = ["util"] }
+tower = { version = "0.5", features = ["util"] }
 hyper = { version = "0.14", features = ["full"] }
