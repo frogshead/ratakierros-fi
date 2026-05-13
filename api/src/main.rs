@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 
 use ratakierros_api::{
-    add_favorite, analyze_gpx, fetch_and_cache_lipas_tracks, finalize_legacy_migration,
-    get_records, get_track, list_tracks, log_run, login_user, migrate_db, register_user,
-    remove_favorite, tracks_count, verify_jwt, AnalyzeError, Claims, Db,
-    DEFAULT_TARGET_DISTANCE_M,
+    add_favorite, analyze_gpx, clamp_limit, fetch_and_cache_lipas_tracks,
+    finalize_legacy_migration, get_leaderboard, get_records, get_track, get_user_profile,
+    list_tracks, log_run, login_user, make_jwt, migrate_db, register_user, remove_favorite,
+    resolve_age_category, resolve_period, tracks_count, update_user_profile, verify_jwt,
+    AnalyzeError, Claims, Db, DEFAULT_TARGET_DISTANCE_M,
 };
 
 // --- Error type ---
@@ -96,6 +97,15 @@ struct TracksQuery {
 }
 
 #[derive(Deserialize)]
+struct PeriodQuery {
+    period: Option<String>,
+    month: Option<String>,
+    year: Option<String>,
+    category: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
 struct RegisterBody {
     email: String,
     display_name: String,
@@ -112,6 +122,24 @@ struct LoginBody {
 struct LogRunBody {
     track_id: i64,
     time_seconds: f64,
+}
+
+#[derive(Deserialize)]
+struct ProfileUpdateBody {
+    display_name: String,
+    birth_year: Option<i32>,
+    gender: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ProfileResponse {
+    user_id: i64,
+    email: String,
+    display_name: String,
+    birth_year: Option<i32>,
+    gender: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -179,12 +207,112 @@ async fn remove_favorite_handler(
 async fn records_handler(
     Extension(db): Extension<Db>,
     Path(id): Path<i64>,
+    Query(q): Query<PeriodQuery>,
     OptionalAuthUser(user_id): OptionalAuthUser,
 ) -> impl IntoResponse {
-    match get_records(&db, id, user_id) {
+    let (period, mut period_info) = match resolve_period(
+        q.period.as_deref(),
+        q.month.as_deref(),
+        q.year.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return AppError::BadRequest(e).into_response(),
+    };
+    let category = match resolve_age_category(q.category.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return AppError::BadRequest(e).into_response(),
+    };
+    if let Some((cat, _)) = &category {
+        period_info.category = Some(cat.as_code());
+    }
+    let limit = clamp_limit(q.limit);
+    let cat_filter = category.as_ref().map(|(_, f)| f);
+    match get_records(&db, id, user_id, &period, period_info, cat_filter, limit) {
         Ok(data) => Json(data).into_response(),
         Err(e) => AppError::Internal(e).into_response(),
     }
+}
+
+async fn leaderboard_handler(
+    Extension(db): Extension<Db>,
+    Query(q): Query<PeriodQuery>,
+    OptionalAuthUser(user_id): OptionalAuthUser,
+) -> impl IntoResponse {
+    let (period, mut period_info) = match resolve_period(
+        q.period.as_deref(),
+        q.month.as_deref(),
+        q.year.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return AppError::BadRequest(e).into_response(),
+    };
+    let category = match resolve_age_category(q.category.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return AppError::BadRequest(e).into_response(),
+    };
+    if let Some((cat, _)) = &category {
+        period_info.category = Some(cat.as_code());
+    }
+    let limit = clamp_limit(q.limit);
+    let cat_filter = category.as_ref().map(|(_, f)| f);
+    match get_leaderboard(&db, user_id, &period, period_info, cat_filter, limit) {
+        Ok(data) => Json(data).into_response(),
+        Err(e) => AppError::Internal(e).into_response(),
+    }
+}
+
+async fn me_handler(
+    Extension(db): Extension<Db>,
+    AuthUser(user_id): AuthUser,
+) -> impl IntoResponse {
+    match get_user_profile(&db, user_id) {
+        Ok(p) => Json(ProfileResponse {
+            user_id: p.user_id,
+            email: p.email,
+            display_name: p.display_name,
+            birth_year: p.birth_year,
+            gender: p.gender,
+            token: None,
+        })
+        .into_response(),
+        Err(e) => AppError::Internal(e).into_response(),
+    }
+}
+
+async fn update_me_handler(
+    Extension(db): Extension<Db>,
+    AuthUser(user_id): AuthUser,
+    Json(body): Json<ProfileUpdateBody>,
+) -> impl IntoResponse {
+    // Capture the previous display_name so we can decide whether to mint a new JWT.
+    let prev_name = match get_user_profile(&db, user_id) {
+        Ok(p) => p.display_name,
+        Err(e) => return AppError::Internal(e).into_response(),
+    };
+    let updated = match update_user_profile(
+        &db,
+        user_id,
+        &body.display_name,
+        body.birth_year,
+        body.gender.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return AppError::BadRequest(e).into_response(),
+    };
+    let token = if prev_name != updated.display_name {
+        make_jwt(user_id, &updated.display_name).ok()
+    } else {
+        None
+    };
+    Json(ProfileResponse {
+        user_id: updated.user_id,
+        email: updated.email,
+        display_name: updated.display_name,
+        birth_year: updated.birth_year,
+        gender: updated.gender,
+        token,
+    })
+    .into_response()
 }
 
 async fn log_run_handler(
@@ -341,6 +469,7 @@ async fn main() {
         .route("/api/tracks", get(tracks_handler))
         .route("/api/tracks/:id", get(track_handler))
         .route("/api/tracks/:id/records", get(records_handler))
+        .route("/api/leaderboard", get(leaderboard_handler))
         .route("/api/runs", post(log_run_handler))
         .route(
             "/api/favorites/:track_id",
@@ -348,6 +477,7 @@ async fn main() {
         )
         .route("/api/auth/register", post(register_handler))
         .route("/api/auth/login", post(login_handler))
+        .route("/api/me", get(me_handler).patch(update_me_handler))
         .route(
             "/api/gpx/analyze",
             post(gpx_analyze_handler).layer(DefaultBodyLimit::max(10 * 1024 * 1024)),

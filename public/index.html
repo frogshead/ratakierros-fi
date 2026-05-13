@@ -517,6 +517,56 @@
       font-weight: 500;
     }
     .modal-tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+    .modal-tab.hidden { display: none; }
+
+    .gender-row {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+      flex-wrap: wrap;
+      font-size: 0.85rem;
+    }
+    .gender-row label {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      text-transform: none;
+      font-weight: 400;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .btn-logout {
+      background: transparent;
+      color: var(--red);
+      border: 1px solid var(--red);
+      padding: 0.5rem 0.85rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      margin-right: auto;
+    }
+    .btn-logout:hover { background: rgba(220, 38, 38, 0.06); }
+    .btn-logout.hidden { display: none; }
+
+    .category-select {
+      padding: 0.35rem 0.55rem;
+      font-size: 0.78rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      margin-left: 0.5rem;
+      cursor: pointer;
+    }
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.6rem;
+    }
+    .filter-row .period-selector { margin-bottom: 0; }
 
     .modal-body {
       padding: 1.25rem;
@@ -560,6 +610,135 @@
       cursor: pointer;
     }
     .btn-secondary:hover { background: var(--bg); }
+
+    /* ── Period selector ─────────────────────────────────── */
+    .period-selector {
+      display: inline-flex;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2px;
+      margin-bottom: 0.6rem;
+      gap: 2px;
+    }
+    .period-selector button {
+      background: transparent;
+      border: none;
+      padding: 0.3rem 0.7rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .period-selector button.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    }
+    .period-selector button:hover:not(.active) { color: var(--text); }
+
+    .records-empty-period {
+      padding: 0.6rem 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* ── Leaderboard (Pörssi) view ───────────────────────── */
+    .nav-link {
+      background: transparent;
+      border: none;
+      color: var(--blue);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .nav-link:hover { background: var(--blue-light); }
+
+    .sidebar-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .leaderboard-view {
+      display: none;
+      flex-direction: column;
+      height: 100dvh;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    body.view-leaderboard .app { display: none; }
+    body.view-leaderboard .leaderboard-view { display: flex; }
+
+    .lb-header {
+      padding: 0.875rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-shrink: 0;
+    }
+    .lb-header h2 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      flex: 1;
+    }
+    .lb-controls {
+      padding: 0.75rem 1rem 0.4rem 1rem;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .lb-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem 1rem 1.5rem 1rem;
+    }
+    .lb-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    .lb-table th, .lb-table td {
+      padding: 0.55rem 0.5rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .lb-table th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .lb-table tr:last-child td { border-bottom: none; }
+    .lb-table .lb-time { font-weight: 600; white-space: nowrap; }
+    .lb-table .lb-track-link {
+      color: var(--blue);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .lb-table .lb-track-link:hover { text-decoration: underline; }
+    .lb-table .lb-rank { width: 1.5rem; color: var(--muted); }
+    .lb-pb {
+      margin-top: 0.9rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--green-bg);
+      color: var(--green);
+      border-radius: 6px;
+      font-size: 0.85rem;
+    }
+    .lb-empty {
+      padding: 1.5rem 0;
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -570,7 +749,10 @@
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <h1>🏃 Ratakierros.fi</h1>
-      <button class="btn-user" id="btn-user">Kirjaudu</button>
+      <div class="sidebar-header-actions">
+        <a class="nav-link" href="#/leaderboard" id="nav-leaderboard">🏆 Pörssi</a>
+        <button class="btn-user" id="btn-user">Kirjaudu</button>
+      </div>
     </div>
     <div class="search-bar">
       <input type="search" id="search-input" placeholder="Hae nimellä tai paikkakunnalla…" autocomplete="off">
@@ -608,15 +790,40 @@
 
 </div>
 
+<!-- ── Leaderboard (Pörssi) view ──────────────────────── -->
+<div class="leaderboard-view" id="leaderboard-view">
+  <div class="lb-header">
+    <a class="nav-link" href="#/" id="lb-back">← Kartalle</a>
+    <h2>🏆 Pörssi — 400 m parhaat</h2>
+  </div>
+  <div class="lb-controls">
+    <div class="filter-row">
+      <div class="period-selector" id="lb-period-selector" role="tablist" aria-label="Aikaväli">
+        <button type="button" data-period="all"   class="active">Kaikki</button>
+        <button type="button" data-period="month">Tämä kuukausi</button>
+        <button type="button" data-period="year">Tämä vuosi</button>
+      </div>
+      <select class="category-select" id="lb-category-select" aria-label="Ikäluokka">
+        <option value="">Kaikki sarjat</option>
+      </select>
+    </div>
+  </div>
+  <div class="lb-content" id="lb-content">
+    <div class="lb-empty">Ladataan…</div>
+  </div>
+</div>
+
 <!-- ── Auth modal ─────────────────────────────────────── -->
 <div class="modal-overlay hidden" id="modal-auth">
   <div class="modal">
     <div class="modal-tabs">
       <div class="modal-tab active" id="tab-login"    onclick="switchTab('login')">Kirjaudu</div>
       <div class="modal-tab"        id="tab-register" onclick="switchTab('register')">Rekisteröidy</div>
+      <div class="modal-tab hidden" id="tab-profile"  onclick="switchTab('profile')">Profiili</div>
     </div>
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-footer">
+      <button class="btn-logout hidden" id="btn-modal-logout">Kirjaudu ulos</button>
       <button class="btn-secondary" onclick="closeModal()">Peruuta</button>
       <button class="btn-primary"   id="btn-auth-submit">Kirjaudu</button>
     </div>
@@ -627,15 +834,33 @@
 <script>
 // ── State ──────────────────────────────────────────────────
 const state = {
-  jwt:             localStorage.getItem('jwt'),
-  user:            null,      // { id, display_name }
-  tracks:          [],
-  selectedId:      null,
-  userLoc:         null,      // { lat, lon }
-  detailMap:       null,
-  detailMarker:    null,
-  authTab:         'login',
+  jwt:               localStorage.getItem('jwt'),
+  user:              null,      // { id, display_name }
+  tracks:            [],
+  selectedId:        null,
+  userLoc:           null,      // { lat, lon }
+  detailMap:         null,
+  detailMarker:      null,
+  authTab:           'login',
+  view:                'map',     // 'map' | 'leaderboard'
+  recordsPeriod:       'all',     // 'all' | 'month' | 'year'
+  recordsCategory:     '',        // '' | 'M40' | 'N55' | ...
+  leaderboardPeriod:   'all',
+  leaderboardCategory: '',
+  profile:             null,      // { display_name, birth_year, gender } once /api/me has loaded
 };
+
+const PERIOD_LABELS = {
+  all:   'Kaikki',
+  month: 'Tämä kuukausi',
+  year:  'Tämä vuosi',
+};
+
+// WMA bands 30..90 in 5-year steps; we expose both Finnish 'N' (women) and 'M' (men).
+const AGE_BANDS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90];
+function ageCategoryOptions() {
+  return AGE_BANDS.map(b => `M${b}`).concat(AGE_BANDS.map(b => `N${b}`));
+}
 
 // ── Utils ──────────────────────────────────────────────────
 function esc(s) {
@@ -739,12 +964,65 @@ async function selectTrack(id) {
     '<div class="detail-empty"><span class="icon">⏳</span>Ladataan…</div>';
 
   try {
-    const data = await api(`/api/tracks/${id}/records`);
+    const data = await fetchRecords(id, state.recordsPeriod, state.recordsCategory);
     renderDetail(data);
   } catch {
     document.getElementById('detail-content').innerHTML =
       '<div class="detail-empty">Tietojen haku epäonnistui</div>';
   }
+}
+
+function fetchRecords(trackId, period, category) {
+  const p = new URLSearchParams();
+  if (period && period !== 'all') p.set('period', period);
+  if (category) p.set('category', category);
+  const qs = p.toString();
+  return api(`/api/tracks/${trackId}/records${qs ? '?' + qs : ''}`);
+}
+
+function renderRecordsSection({ records, personal_best }) {
+  const medals = ['🥇', '🥈', '🥉'];
+  const catOptions = ['<option value="">Kaikki sarjat</option>']
+    .concat(ageCategoryOptions().map(c =>
+      `<option value="${c}"${state.recordsCategory === c ? ' selected' : ''}>${c}</option>`
+    ))
+    .join('');
+  const selector = `
+    <div class="filter-row">
+      <div class="period-selector" id="records-period-selector" role="tablist" aria-label="Aikaväli">
+        ${Object.entries(PERIOD_LABELS).map(([k, label]) =>
+          `<button type="button" data-period="${k}"${
+            state.recordsPeriod === k ? ' class="active"' : ''
+          }>${label}</button>`
+        ).join('')}
+      </div>
+      <select class="category-select" id="records-category-select" aria-label="Ikäluokka">${catOptions}</select>
+    </div>`;
+
+  let table;
+  if (records.length) {
+    const rows = records.map(r =>
+      `<tr>
+        <td>${r.rank <= 3 ? medals[r.rank - 1] : r.rank}</td>
+        <td>${esc(r.display_name)}</td>
+        <td><strong>${fmtTime(r.time_seconds)}</strong></td>
+      </tr>`
+    ).join('');
+    table = `
+      <table class="records-table">
+        <thead><tr><th>#</th><th>Juoksija</th><th>Aika</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${personal_best != null
+        ? `<div class="personal-best">✓ Oma ennätyksesi (kaikki ajat): <strong>${fmtTime(personal_best)}</strong></div>`
+        : ''}`;
+  } else if (state.recordsPeriod === 'all') {
+    table = '<p class="no-records">Ei tuloksia vielä — ole ensimmäinen!</p>';
+  } else {
+    table = `<p class="records-empty-period">Ei tuloksia tällä aikavälillä.</p>`;
+  }
+
+  return selector + table;
 }
 
 function renderDetail({ track, records, personal_best }) {
@@ -765,28 +1043,7 @@ function renderDetail({ track, records, personal_best }) {
     favBtn.onclick = null;
   }
 
-  const medals = ['🥇', '🥈', '🥉'];
-
-  let recordsHtml;
-  if (records.length) {
-    const rows = records.map(r =>
-      `<tr>
-        <td>${r.rank <= 3 ? medals[r.rank - 1] : r.rank}</td>
-        <td>${esc(r.display_name)}</td>
-        <td><strong>${fmtTime(r.time_seconds)}</strong></td>
-      </tr>`
-    ).join('');
-    recordsHtml = `
-      <table class="records-table">
-        <thead><tr><th>#</th><th>Juoksija</th><th>Aika</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      ${personal_best != null
-        ? `<div class="personal-best">✓ Oma ennätyksesi: <strong>${fmtTime(personal_best)}</strong></div>`
-        : ''}`;
-  } else {
-    recordsHtml = '<p class="no-records">Ei tuloksia vielä — ole ensimmäinen!</p>';
-  }
+  const recordsHtml = renderRecordsSection({ records, personal_best });
 
   const logHtml = state.user
     ? `<form class="log-run-form" id="form-run" onsubmit="submitRun(event,${track.id})">
@@ -824,9 +1081,9 @@ function renderDetail({ track, records, personal_best }) {
         📍 Avaa Google Mapsissa
       </a>
     </div>
-    <div class="detail-section">
+    <div class="detail-section" id="records-section">
       <div class="section-title">Kenttäennätykset (400 m)</div>
-      ${recordsHtml}
+      <div id="records-body">${recordsHtml}</div>
     </div>
     <div class="detail-section">
       <div class="section-title">Kirjaa juoksu</div>
@@ -835,6 +1092,44 @@ function renderDetail({ track, records, personal_best }) {
 
   // Init map after DOM update
   requestAnimationFrame(() => initDetailMap(track.lat, track.lon, name));
+
+  bindRecordsFilters();
+}
+
+async function reloadRecordsSection() {
+  if (state.selectedId == null) return;
+  const body = document.getElementById('records-body');
+  if (body) body.innerHTML = '<p class="records-empty-period">Ladataan…</p>';
+  try {
+    const data = await fetchRecords(state.selectedId, state.recordsPeriod, state.recordsCategory);
+    if (body) {
+      body.innerHTML = renderRecordsSection(data);
+      bindRecordsFilters();
+    }
+  } catch (err) {
+    if (body) body.innerHTML = `<p class="records-empty-period">${esc(err.message)}</p>`;
+  }
+}
+
+function bindRecordsFilters() {
+  const sel = document.getElementById('records-period-selector');
+  if (sel) {
+    sel.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const next = btn.dataset.period;
+        if (next === state.recordsPeriod) return;
+        state.recordsPeriod = next;
+        reloadRecordsSection();
+      });
+    });
+  }
+  const cat = document.getElementById('records-category-select');
+  if (cat) {
+    cat.addEventListener('change', () => {
+      state.recordsCategory = cat.value;
+      reloadRecordsSection();
+    });
+  }
 }
 
 // ── Leaflet detail map ─────────────────────────────────────
@@ -917,8 +1212,8 @@ async function submitRun(e, trackId) {
     });
     msgEl.innerHTML = '<span class="form-ok">✓ Aika kirjattu!</span>';
     timeInput.value = '';
-    // Reload records section
-    const data = await api(`/api/tracks/${trackId}/records`);
+    // Reload records section in the currently-selected period.
+    const data = await fetchRecords(trackId, state.recordsPeriod, state.recordsCategory);
     renderDetail(data);
   } catch (err) {
     msgEl.innerHTML = `<span class="form-error">${esc(err.message)}</span>`;
@@ -1005,26 +1300,48 @@ document.getElementById('btn-locate').addEventListener('click', () => {
 // ── User button ────────────────────────────────────────────
 document.getElementById('btn-user').addEventListener('click', () => {
   if (state.user) {
-    // Log out
-    state.user = null;
-    state.jwt  = null;
-    localStorage.removeItem('jwt');
-    const btn  = document.getElementById('btn-user');
-    btn.textContent = 'Kirjaudu';
-    btn.classList.remove('logged-in');
-    // Reload list so is_favorite is cleared everywhere; refresh detail too.
-    const q = document.getElementById('search-input').value.trim();
-    loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
-    if (state.selectedId) selectTrack(state.selectedId);
+    openProfileModal();
   } else {
     openModal();
   }
 });
 
+document.getElementById('btn-modal-logout').addEventListener('click', logout);
+
+function logout() {
+  state.user    = null;
+  state.jwt     = null;
+  state.profile = null;
+  localStorage.removeItem('jwt');
+  const btn = document.getElementById('btn-user');
+  btn.textContent = 'Kirjaudu';
+  btn.classList.remove('logged-in');
+  closeModal();
+  const q = document.getElementById('search-input').value.trim();
+  loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
+  if (state.selectedId) selectTrack(state.selectedId);
+  if (state.view === 'leaderboard') loadLeaderboard();
+}
+
 // ── Auth modal ─────────────────────────────────────────────
 function openModal() {
   document.getElementById('modal-auth').classList.remove('hidden');
-  switchTab(state.authTab);
+  setAuthTabsVisible({ login: true, register: true, profile: false });
+  switchTab(state.authTab === 'profile' ? 'login' : state.authTab);
+}
+
+function openProfileModal() {
+  document.getElementById('modal-auth').classList.remove('hidden');
+  setAuthTabsVisible({ login: false, register: false, profile: true });
+  switchTab('profile');
+  // Fetch the latest profile before swapping content.
+  loadProfileIntoModal();
+}
+
+function setAuthTabsVisible({ login, register, profile }) {
+  document.getElementById('tab-login').classList.toggle('hidden', !login);
+  document.getElementById('tab-register').classList.toggle('hidden', !register);
+  document.getElementById('tab-profile').classList.toggle('hidden', !profile);
 }
 
 function closeModal() {
@@ -1039,18 +1356,25 @@ function switchTab(tab) {
   state.authTab = tab;
   document.getElementById('tab-login').classList.toggle('active', tab === 'login');
   document.getElementById('tab-register').classList.toggle('active', tab === 'register');
-  document.getElementById('btn-auth-submit').textContent =
-    tab === 'login' ? 'Kirjaudu' : 'Rekisteröidy';
+  document.getElementById('tab-profile').classList.toggle('active', tab === 'profile');
+
+  const submit = document.getElementById('btn-auth-submit');
+  const logoutBtn = document.getElementById('btn-modal-logout');
+  logoutBtn.classList.toggle('hidden', tab !== 'profile');
 
   const body = document.getElementById('modal-body');
   if (tab === 'login') {
+    submit.textContent = 'Kirjaudu';
+    submit.onclick = doAuth;
     body.innerHTML = `
       <label>Sähköposti</label>
       <input type="email" id="auth-email" placeholder="sinä@example.com" autocomplete="email">
       <label>Salasana</label>
       <input type="password" id="auth-pw" placeholder="••••••" autocomplete="current-password">
       <div id="auth-err"></div>`;
-  } else {
+  } else if (tab === 'register') {
+    submit.textContent = 'Rekisteröidy';
+    submit.onclick = doAuth;
     body.innerHTML = `
       <label>Nimi</label>
       <input type="text" id="auth-name" placeholder="Etunimi Sukunimi" autocomplete="name">
@@ -1059,17 +1383,93 @@ function switchTab(tab) {
       <label>Salasana</label>
       <input type="password" id="auth-pw" placeholder="Vähintään 6 merkkiä" autocomplete="new-password">
       <div id="auth-err"></div>`;
+  } else if (tab === 'profile') {
+    submit.textContent = 'Tallenna';
+    submit.onclick = saveProfile;
+    body.innerHTML = profileFormHtml(state.profile);
   }
 
   // Allow Enter to submit
   setTimeout(() => {
     body.querySelectorAll('input').forEach(inp =>
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') doAuth(); })
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') submit.click(); })
     );
   }, 0);
 }
 
-document.getElementById('btn-auth-submit').addEventListener('click', doAuth);
+function profileFormHtml(p) {
+  const name  = p?.display_name ?? state.user?.display_name ?? '';
+  const year  = p?.birth_year ?? '';
+  const gen   = p?.gender ?? '';
+  const checked = v => gen === v ? ' checked' : '';
+  return `
+    <label>Näyttönimi</label>
+    <input type="text" id="profile-name" value="${esc(name)}" autocomplete="name">
+    <label>Syntymävuosi (valinnainen)</label>
+    <input type="number" id="profile-year" min="1900" max="2100" placeholder="esim. 1984" value="${year}">
+    <label>Sukupuoli (valinnainen)</label>
+    <div class="gender-row">
+      <label><input type="radio" name="profile-gender" value="M"${checked('M')}> Mies</label>
+      <label><input type="radio" name="profile-gender" value="N"${checked('N')}> Nainen</label>
+      <label><input type="radio" name="profile-gender" value=""${checked('')}> En halua kertoa</label>
+    </div>
+    <div id="profile-err"></div>`;
+}
+
+async function loadProfileIntoModal() {
+  try {
+    const data = await api('/api/me');
+    state.profile = data;
+    if (state.authTab === 'profile') {
+      document.getElementById('modal-body').innerHTML = profileFormHtml(state.profile);
+    }
+  } catch (err) {
+    const errEl = document.getElementById('profile-err');
+    if (errEl) errEl.innerHTML = `<span class="form-error">${esc(err.message)}</span>`;
+  }
+}
+
+async function saveProfile() {
+  const errEl   = document.getElementById('profile-err');
+  const nameEl  = document.getElementById('profile-name');
+  const yearEl  = document.getElementById('profile-year');
+  const genderEl = document.querySelector('input[name="profile-gender"]:checked');
+  const submit  = document.getElementById('btn-auth-submit');
+  if (!nameEl || !nameEl.value.trim()) {
+    errEl.innerHTML = '<span class="form-error">Nimi vaaditaan</span>';
+    return;
+  }
+  const body = {
+    display_name: nameEl.value.trim(),
+    birth_year:   yearEl.value ? Number(yearEl.value) : null,
+    gender:       genderEl?.value || null,
+  };
+  const orig = submit.textContent;
+  submit.disabled = true;
+  submit.textContent = 'Tallennetaan…';
+  try {
+    const data = await api('/api/me', { method: 'PATCH', body: JSON.stringify(body) });
+    state.profile = data;
+    if (data.token) {
+      state.jwt = data.token;
+      localStorage.setItem('jwt', data.token);
+    }
+    state.user = { id: data.user_id, display_name: data.display_name };
+    const userBtn = document.getElementById('btn-user');
+    userBtn.textContent = data.display_name;
+    userBtn.classList.add('logged-in');
+    errEl.innerHTML = '<span class="form-ok">✓ Tallennettu</span>';
+    // Profile changes may shift the active user in/out of a category — refresh the
+    // current view so the change is visible without a manual reload.
+    if (state.view === 'leaderboard') loadLeaderboard();
+    if (state.selectedId != null) reloadRecordsSection();
+  } catch (err) {
+    errEl.innerHTML = `<span class="form-error">${esc(err.message)}</span>`;
+  } finally {
+    submit.disabled = false;
+    submit.textContent = orig;
+  }
+}
 
 async function doAuth() {
   const email  = document.getElementById('auth-email')?.value?.trim();
@@ -1120,12 +1520,115 @@ async function doAuth() {
     const q = document.getElementById('search-input').value.trim();
     loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
     if (state.selectedId) selectTrack(state.selectedId);
+    if (state.view === 'leaderboard') loadLeaderboard();
   } catch (err) {
     errEl.innerHTML  = `<span class="form-error">${esc(err.message)}</span>`;
     btn.disabled    = false;
     btn.textContent = orig;
   }
 }
+
+// ── Leaderboard (Pörssi) ───────────────────────────────────
+function fetchLeaderboard(period, category) {
+  const p = new URLSearchParams();
+  if (period && period !== 'all') p.set('period', period);
+  if (category) p.set('category', category);
+  const qs = p.toString();
+  return api(`/api/leaderboard${qs ? '?' + qs : ''}`);
+}
+
+async function loadLeaderboard() {
+  const content = document.getElementById('lb-content');
+  content.innerHTML = '<div class="lb-empty">Ladataan…</div>';
+  try {
+    const data = await fetchLeaderboard(state.leaderboardPeriod, state.leaderboardCategory);
+    renderLeaderboard(data);
+  } catch (err) {
+    content.innerHTML = `<div class="lb-empty">${esc(err.message)}</div>`;
+  }
+}
+
+function populateLeaderboardCategorySelect() {
+  const sel = document.getElementById('lb-category-select');
+  if (!sel || sel.dataset.populated) return;
+  ageCategoryOptions().forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  });
+  sel.dataset.populated = '1';
+  sel.addEventListener('change', () => {
+    state.leaderboardCategory = sel.value;
+    loadLeaderboard();
+  });
+}
+
+function renderLeaderboard({ entries, personal_best }) {
+  const medals = ['🥇', '🥈', '🥉'];
+  const content = document.getElementById('lb-content');
+  if (!entries.length) {
+    content.innerHTML = '<div class="lb-empty">Ei tuloksia tällä aikavälillä.</div>';
+    return;
+  }
+  const rows = entries.map(e => {
+    const rank  = e.rank <= 3 ? medals[e.rank - 1] : e.rank;
+    const where = [e.track_name, e.track_city].filter(Boolean).map(esc).join(', ');
+    return `<tr>
+      <td class="lb-rank">${rank}</td>
+      <td>${esc(e.display_name)}</td>
+      <td class="lb-time">${fmtTime(e.time_seconds)}</td>
+      <td><a class="lb-track-link" data-track-id="${e.track_id}">${where || '—'}</a></td>
+    </tr>`;
+  }).join('');
+  const pbHtml = personal_best
+    ? `<div class="lb-pb">✓ Oma paras tällä aikavälillä: <strong>${fmtTime(personal_best.time_seconds)}</strong>${
+        personal_best.track_name ? ` — ${esc(personal_best.track_name)}` : ''
+      }</div>`
+    : '';
+  content.innerHTML = `
+    <table class="lb-table">
+      <thead><tr><th>#</th><th>Juoksija</th><th>Aika</th><th>Kenttä</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${pbHtml}`;
+
+  content.querySelectorAll('.lb-track-link').forEach(a => {
+    a.addEventListener('click', () => {
+      const id = Number(a.dataset.trackId);
+      location.hash = '#/';
+      // Hash change handler switches view; selectTrack after the switch fires so
+      // the detail panel loads.
+      setTimeout(() => selectTrack(id), 0);
+    });
+  });
+}
+
+// Period selector on the leaderboard
+document.querySelectorAll('#lb-period-selector button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const next = btn.dataset.period;
+    if (next === state.leaderboardPeriod) return;
+    state.leaderboardPeriod = next;
+    document.querySelectorAll('#lb-period-selector button').forEach(b =>
+      b.classList.toggle('active', b.dataset.period === next)
+    );
+    loadLeaderboard();
+  });
+});
+
+// ── Router ─────────────────────────────────────────────────
+function applyRoute() {
+  const h = location.hash;
+  const wantsLeaderboard = h === '#/leaderboard';
+  state.view = wantsLeaderboard ? 'leaderboard' : 'map';
+  document.body.classList.toggle('view-leaderboard', wantsLeaderboard);
+  if (wantsLeaderboard) {
+    populateLeaderboardCategorySelect();
+    loadLeaderboard();
+  }
+}
+window.addEventListener('hashchange', applyRoute);
 
 // ── Init ───────────────────────────────────────────────────
 function init() {
@@ -1145,6 +1648,8 @@ function init() {
         const btn  = document.getElementById('btn-user');
         btn.textContent = state.user.display_name;
         btn.classList.add('logged-in');
+        // Warm state.profile so the Profile modal opens without a fetch flicker.
+        api('/api/me').then(p => { state.profile = p; }).catch(() => {});
       } else {
         state.jwt = null;
         localStorage.removeItem('jwt');
@@ -1168,6 +1673,8 @@ function init() {
   } else {
     loadTracks();
   }
+
+  applyRoute();
 }
 
 init();

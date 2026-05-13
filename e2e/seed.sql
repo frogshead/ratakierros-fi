@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS users (
     email         TEXT UNIQUE NOT NULL,
     display_name  TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    birth_year    INTEGER,
+    gender        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -60,3 +62,30 @@ VALUES
     (999001, 'E2E Helsinki Olympic Stadium', 60.1872, 24.9272, 1220, 'active', 'Paavo Nurmen tie 1', '00250', 'Helsinki', 'Taka-Töölö', 'tartan', 400, 8, NULL, '2026-05-08T00:00:00Z'),
     (999002, 'E2E Tampere Tammela',         61.5050, 23.7667, 1220, 'active', 'Tammelan puistokatu 12', '33100', 'Tampere', 'Tammela', 'tartan', 400, 6, NULL, '2026-05-08T00:00:00Z'),
     (999003, 'E2E Oulu Raatti',             65.0186, 25.4789, 1220, 'active', 'Raatintie 5', '90130', 'Oulu', 'Raatti', 'tartan', 400, 8, NULL, '2026-05-08T00:00:00Z');
+
+-- Test users + historical runs for leaderboard tests. password_hash is a stub
+-- (login flow is exercised separately by other tests).
+-- Alice and Bob carry birth_year+gender so the Phase 2 age-category filter has
+-- deterministic data to assert against. Carol intentionally has neither — she
+-- must drop out of every category-scoped board.
+INSERT OR IGNORE INTO users (email, display_name, password_hash, created_at, birth_year, gender) VALUES
+    ('e2e-alice@example.com', 'E2E Alice', 'stub', '2025-01-01T00:00:00Z', 1984, 'N'),
+    ('e2e-bob@example.com',   'E2E Bob',   'stub', '2025-01-01T00:00:00Z', 1974, 'M'),
+    ('e2e-carol@example.com', 'E2E Carol', 'stub', '2025-01-01T00:00:00Z', NULL, NULL);
+
+-- Cross-track runs in fixed past dates so the all-time leaderboard is
+-- deterministic. Bob holds the overall best (58.40 at Helsinki).
+-- UNION ALL form is used instead of `VALUES (...) AS r(col, ...)` because
+-- older SQLite versions don't support column aliases on table-valued VALUES.
+INSERT OR IGNORE INTO runs (user_id, track_id, time_seconds, logged_at)
+SELECT u.id, t.id, r.time_seconds, r.logged_at
+FROM (
+        SELECT 'e2e-alice@example.com' AS email, 999001 AS lipas_id, 60.50 AS time_seconds, '2025-06-15T10:00:00+00:00' AS logged_at
+        UNION ALL SELECT 'e2e-alice@example.com', 999002, 61.20, '2025-07-20T10:00:00+00:00'
+        UNION ALL SELECT 'e2e-bob@example.com',   999001, 58.40, '2025-08-01T10:00:00+00:00'
+        UNION ALL SELECT 'e2e-bob@example.com',   999003, 59.10, '2025-09-12T10:00:00+00:00'
+        UNION ALL SELECT 'e2e-carol@example.com', 999002, 62.75, '2025-10-05T10:00:00+00:00'
+        UNION ALL SELECT 'e2e-carol@example.com', 999001, 63.30, '2025-11-18T10:00:00+00:00'
+) AS r
+JOIN users  u ON u.email = r.email
+JOIN tracks t ON t.lipas_id = r.lipas_id;
