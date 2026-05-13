@@ -560,6 +560,135 @@
       cursor: pointer;
     }
     .btn-secondary:hover { background: var(--bg); }
+
+    /* ── Period selector ─────────────────────────────────── */
+    .period-selector {
+      display: inline-flex;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 2px;
+      margin-bottom: 0.6rem;
+      gap: 2px;
+    }
+    .period-selector button {
+      background: transparent;
+      border: none;
+      padding: 0.3rem 0.7rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .period-selector button.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    }
+    .period-selector button:hover:not(.active) { color: var(--text); }
+
+    .records-empty-period {
+      padding: 0.6rem 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    /* ── Leaderboard (Pörssi) view ───────────────────────── */
+    .nav-link {
+      background: transparent;
+      border: none;
+      color: var(--blue);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .nav-link:hover { background: var(--blue-light); }
+
+    .sidebar-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .leaderboard-view {
+      display: none;
+      flex-direction: column;
+      height: 100dvh;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    body.view-leaderboard .app { display: none; }
+    body.view-leaderboard .leaderboard-view { display: flex; }
+
+    .lb-header {
+      padding: 0.875rem 1rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-shrink: 0;
+    }
+    .lb-header h2 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      flex: 1;
+    }
+    .lb-controls {
+      padding: 0.75rem 1rem 0.4rem 1rem;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .lb-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem 1rem 1.5rem 1rem;
+    }
+    .lb-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    .lb-table th, .lb-table td {
+      padding: 0.55rem 0.5rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .lb-table th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .lb-table tr:last-child td { border-bottom: none; }
+    .lb-table .lb-time { font-weight: 600; white-space: nowrap; }
+    .lb-table .lb-track-link {
+      color: var(--blue);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .lb-table .lb-track-link:hover { text-decoration: underline; }
+    .lb-table .lb-rank { width: 1.5rem; color: var(--muted); }
+    .lb-pb {
+      margin-top: 0.9rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--green-bg);
+      color: var(--green);
+      border-radius: 6px;
+      font-size: 0.85rem;
+    }
+    .lb-empty {
+      padding: 1.5rem 0;
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -570,7 +699,10 @@
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <h1>🏃 Ratakierros.fi</h1>
-      <button class="btn-user" id="btn-user">Kirjaudu</button>
+      <div class="sidebar-header-actions">
+        <a class="nav-link" href="#/leaderboard" id="nav-leaderboard">🏆 Pörssi</a>
+        <button class="btn-user" id="btn-user">Kirjaudu</button>
+      </div>
     </div>
     <div class="search-bar">
       <input type="search" id="search-input" placeholder="Hae nimellä tai paikkakunnalla…" autocomplete="off">
@@ -608,6 +740,24 @@
 
 </div>
 
+<!-- ── Leaderboard (Pörssi) view ──────────────────────── -->
+<div class="leaderboard-view" id="leaderboard-view">
+  <div class="lb-header">
+    <a class="nav-link" href="#/" id="lb-back">← Kartalle</a>
+    <h2>🏆 Pörssi — 400 m parhaat</h2>
+  </div>
+  <div class="lb-controls">
+    <div class="period-selector" id="lb-period-selector" role="tablist" aria-label="Aikaväli">
+      <button type="button" data-period="all"   class="active">Kaikki</button>
+      <button type="button" data-period="month">Tämä kuukausi</button>
+      <button type="button" data-period="year">Tämä vuosi</button>
+    </div>
+  </div>
+  <div class="lb-content" id="lb-content">
+    <div class="lb-empty">Ladataan…</div>
+  </div>
+</div>
+
 <!-- ── Auth modal ─────────────────────────────────────── -->
 <div class="modal-overlay hidden" id="modal-auth">
   <div class="modal">
@@ -627,14 +777,23 @@
 <script>
 // ── State ──────────────────────────────────────────────────
 const state = {
-  jwt:             localStorage.getItem('jwt'),
-  user:            null,      // { id, display_name }
-  tracks:          [],
-  selectedId:      null,
-  userLoc:         null,      // { lat, lon }
-  detailMap:       null,
-  detailMarker:    null,
-  authTab:         'login',
+  jwt:               localStorage.getItem('jwt'),
+  user:              null,      // { id, display_name }
+  tracks:            [],
+  selectedId:        null,
+  userLoc:           null,      // { lat, lon }
+  detailMap:         null,
+  detailMarker:      null,
+  authTab:           'login',
+  view:              'map',     // 'map' | 'leaderboard'
+  recordsPeriod:     'all',     // 'all' | 'month' | 'year'
+  leaderboardPeriod: 'all',
+};
+
+const PERIOD_LABELS = {
+  all:   'Kaikki',
+  month: 'Tämä kuukausi',
+  year:  'Tämä vuosi',
 };
 
 // ── Utils ──────────────────────────────────────────────────
@@ -739,12 +898,56 @@ async function selectTrack(id) {
     '<div class="detail-empty"><span class="icon">⏳</span>Ladataan…</div>';
 
   try {
-    const data = await api(`/api/tracks/${id}/records`);
+    const data = await fetchRecords(id, state.recordsPeriod);
     renderDetail(data);
   } catch {
     document.getElementById('detail-content').innerHTML =
       '<div class="detail-empty">Tietojen haku epäonnistui</div>';
   }
+}
+
+function fetchRecords(trackId, period) {
+  const p = new URLSearchParams();
+  if (period && period !== 'all') p.set('period', period);
+  const qs = p.toString();
+  return api(`/api/tracks/${trackId}/records${qs ? '?' + qs : ''}`);
+}
+
+function renderRecordsSection({ records, personal_best }) {
+  const medals = ['🥇', '🥈', '🥉'];
+  const selector = `
+    <div class="period-selector" id="records-period-selector" role="tablist" aria-label="Aikaväli">
+      ${Object.entries(PERIOD_LABELS).map(([k, label]) =>
+        `<button type="button" data-period="${k}"${
+          state.recordsPeriod === k ? ' class="active"' : ''
+        }>${label}</button>`
+      ).join('')}
+    </div>`;
+
+  let table;
+  if (records.length) {
+    const rows = records.map(r =>
+      `<tr>
+        <td>${r.rank <= 3 ? medals[r.rank - 1] : r.rank}</td>
+        <td>${esc(r.display_name)}</td>
+        <td><strong>${fmtTime(r.time_seconds)}</strong></td>
+      </tr>`
+    ).join('');
+    table = `
+      <table class="records-table">
+        <thead><tr><th>#</th><th>Juoksija</th><th>Aika</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${personal_best != null
+        ? `<div class="personal-best">✓ Oma ennätyksesi (kaikki ajat): <strong>${fmtTime(personal_best)}</strong></div>`
+        : ''}`;
+  } else if (state.recordsPeriod === 'all') {
+    table = '<p class="no-records">Ei tuloksia vielä — ole ensimmäinen!</p>';
+  } else {
+    table = `<p class="records-empty-period">Ei tuloksia tällä aikavälillä.</p>`;
+  }
+
+  return selector + table;
 }
 
 function renderDetail({ track, records, personal_best }) {
@@ -765,28 +968,7 @@ function renderDetail({ track, records, personal_best }) {
     favBtn.onclick = null;
   }
 
-  const medals = ['🥇', '🥈', '🥉'];
-
-  let recordsHtml;
-  if (records.length) {
-    const rows = records.map(r =>
-      `<tr>
-        <td>${r.rank <= 3 ? medals[r.rank - 1] : r.rank}</td>
-        <td>${esc(r.display_name)}</td>
-        <td><strong>${fmtTime(r.time_seconds)}</strong></td>
-      </tr>`
-    ).join('');
-    recordsHtml = `
-      <table class="records-table">
-        <thead><tr><th>#</th><th>Juoksija</th><th>Aika</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      ${personal_best != null
-        ? `<div class="personal-best">✓ Oma ennätyksesi: <strong>${fmtTime(personal_best)}</strong></div>`
-        : ''}`;
-  } else {
-    recordsHtml = '<p class="no-records">Ei tuloksia vielä — ole ensimmäinen!</p>';
-  }
+  const recordsHtml = renderRecordsSection({ records, personal_best });
 
   const logHtml = state.user
     ? `<form class="log-run-form" id="form-run" onsubmit="submitRun(event,${track.id})">
@@ -824,9 +1006,9 @@ function renderDetail({ track, records, personal_best }) {
         📍 Avaa Google Mapsissa
       </a>
     </div>
-    <div class="detail-section">
+    <div class="detail-section" id="records-section">
       <div class="section-title">Kenttäennätykset (400 m)</div>
-      ${recordsHtml}
+      <div id="records-body">${recordsHtml}</div>
     </div>
     <div class="detail-section">
       <div class="section-title">Kirjaa juoksu</div>
@@ -835,6 +1017,31 @@ function renderDetail({ track, records, personal_best }) {
 
   // Init map after DOM update
   requestAnimationFrame(() => initDetailMap(track.lat, track.lon, name));
+
+  bindRecordsPeriodSelector();
+}
+
+function bindRecordsPeriodSelector() {
+  const sel = document.getElementById('records-period-selector');
+  if (!sel) return;
+  sel.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const next = btn.dataset.period;
+      if (next === state.recordsPeriod || state.selectedId == null) return;
+      state.recordsPeriod = next;
+      const body = document.getElementById('records-body');
+      if (body) body.innerHTML = '<p class="records-empty-period">Ladataan…</p>';
+      try {
+        const data = await fetchRecords(state.selectedId, next);
+        if (body) {
+          body.innerHTML = renderRecordsSection(data);
+          bindRecordsPeriodSelector();
+        }
+      } catch (err) {
+        if (body) body.innerHTML = `<p class="records-empty-period">${esc(err.message)}</p>`;
+      }
+    });
+  });
 }
 
 // ── Leaflet detail map ─────────────────────────────────────
@@ -917,8 +1124,8 @@ async function submitRun(e, trackId) {
     });
     msgEl.innerHTML = '<span class="form-ok">✓ Aika kirjattu!</span>';
     timeInput.value = '';
-    // Reload records section
-    const data = await api(`/api/tracks/${trackId}/records`);
+    // Reload records section in the currently-selected period.
+    const data = await fetchRecords(trackId, state.recordsPeriod);
     renderDetail(data);
   } catch (err) {
     msgEl.innerHTML = `<span class="form-error">${esc(err.message)}</span>`;
@@ -1016,6 +1223,7 @@ document.getElementById('btn-user').addEventListener('click', () => {
     const q = document.getElementById('search-input').value.trim();
     loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
     if (state.selectedId) selectTrack(state.selectedId);
+    if (state.view === 'leaderboard') loadLeaderboard();
   } else {
     openModal();
   }
@@ -1120,12 +1328,95 @@ async function doAuth() {
     const q = document.getElementById('search-input').value.trim();
     loadTracks(state.userLoc?.lat, state.userLoc?.lon, q);
     if (state.selectedId) selectTrack(state.selectedId);
+    if (state.view === 'leaderboard') loadLeaderboard();
   } catch (err) {
     errEl.innerHTML  = `<span class="form-error">${esc(err.message)}</span>`;
     btn.disabled    = false;
     btn.textContent = orig;
   }
 }
+
+// ── Leaderboard (Pörssi) ───────────────────────────────────
+function fetchLeaderboard(period) {
+  const p = new URLSearchParams();
+  if (period && period !== 'all') p.set('period', period);
+  const qs = p.toString();
+  return api(`/api/leaderboard${qs ? '?' + qs : ''}`);
+}
+
+async function loadLeaderboard() {
+  const content = document.getElementById('lb-content');
+  content.innerHTML = '<div class="lb-empty">Ladataan…</div>';
+  try {
+    const data = await fetchLeaderboard(state.leaderboardPeriod);
+    renderLeaderboard(data);
+  } catch (err) {
+    content.innerHTML = `<div class="lb-empty">${esc(err.message)}</div>`;
+  }
+}
+
+function renderLeaderboard({ entries, personal_best }) {
+  const medals = ['🥇', '🥈', '🥉'];
+  const content = document.getElementById('lb-content');
+  if (!entries.length) {
+    content.innerHTML = '<div class="lb-empty">Ei tuloksia tällä aikavälillä.</div>';
+    return;
+  }
+  const rows = entries.map(e => {
+    const rank  = e.rank <= 3 ? medals[e.rank - 1] : e.rank;
+    const where = [e.track_name, e.track_city].filter(Boolean).map(esc).join(', ');
+    return `<tr>
+      <td class="lb-rank">${rank}</td>
+      <td>${esc(e.display_name)}</td>
+      <td class="lb-time">${fmtTime(e.time_seconds)}</td>
+      <td><a class="lb-track-link" data-track-id="${e.track_id}">${where || '—'}</a></td>
+    </tr>`;
+  }).join('');
+  const pbHtml = personal_best
+    ? `<div class="lb-pb">✓ Oma paras tällä aikavälillä: <strong>${fmtTime(personal_best.time_seconds)}</strong>${
+        personal_best.track_name ? ` — ${esc(personal_best.track_name)}` : ''
+      }</div>`
+    : '';
+  content.innerHTML = `
+    <table class="lb-table">
+      <thead><tr><th>#</th><th>Juoksija</th><th>Aika</th><th>Kenttä</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${pbHtml}`;
+
+  content.querySelectorAll('.lb-track-link').forEach(a => {
+    a.addEventListener('click', () => {
+      const id = Number(a.dataset.trackId);
+      location.hash = '#/';
+      // Hash change handler switches view; selectTrack after the switch fires so
+      // the detail panel loads.
+      setTimeout(() => selectTrack(id), 0);
+    });
+  });
+}
+
+// Period selector on the leaderboard
+document.querySelectorAll('#lb-period-selector button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const next = btn.dataset.period;
+    if (next === state.leaderboardPeriod) return;
+    state.leaderboardPeriod = next;
+    document.querySelectorAll('#lb-period-selector button').forEach(b =>
+      b.classList.toggle('active', b.dataset.period === next)
+    );
+    loadLeaderboard();
+  });
+});
+
+// ── Router ─────────────────────────────────────────────────
+function applyRoute() {
+  const h = location.hash;
+  const wantsLeaderboard = h === '#/leaderboard';
+  state.view = wantsLeaderboard ? 'leaderboard' : 'map';
+  document.body.classList.toggle('view-leaderboard', wantsLeaderboard);
+  if (wantsLeaderboard) loadLeaderboard();
+}
+window.addEventListener('hashchange', applyRoute);
 
 // ── Init ───────────────────────────────────────────────────
 function init() {
@@ -1168,6 +1459,8 @@ function init() {
   } else {
     loadTracks();
   }
+
+  applyRoute();
 }
 
 init();

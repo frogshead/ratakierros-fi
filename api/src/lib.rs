@@ -3,7 +3,7 @@ use argon2::{
     Argon2,
 };
 use rand_core::OsRng;
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use geo::HaversineDistance;
 use geo_types::Point;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
@@ -76,6 +76,38 @@ pub struct TrackRecords {
     pub track: Track,
     pub records: Vec<RecordEntry>,
     pub personal_best: Option<f64>,
+    #[serde(flatten)]
+    pub period_info: PeriodInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LeaderboardEntry {
+    pub rank: i64,
+    pub user_id: i64,
+    pub display_name: String,
+    pub time_seconds: f64,
+    pub logged_at: String,
+    pub track_id: i64,
+    pub track_name: Option<String>,
+    pub track_city: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PersonalBestEntry {
+    pub time_seconds: f64,
+    pub logged_at: String,
+    pub track_id: i64,
+    pub track_name: Option<String>,
+    pub track_city: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Leaderboard {
+    pub entries: Vec<LeaderboardEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personal_best: Option<PersonalBestEntry>,
+    #[serde(flatten)]
+    pub period_info: PeriodInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,6 +120,107 @@ pub struct Claims {
 const TRACK_COLUMNS: &str =
     "t.id, t.lipas_id, t.name, t.lat, t.lon, t.city, t.suburb, t.address, t.postal_code, \
      t.surface, t.track_length_m, t.lanes, t.status, t.type_code";
+
+// --- Period filter ---
+//
+// `runs.logged_at` is stored as RFC3339 UTC (`Utc::now().to_rfc3339()`), so
+// lexicographic comparison matches chronological order. Range filters are
+// half-open [start, end) and use the same string format as the inserted rows.
+
+pub const LEADERBOARD_DEFAULT_LIMIT: u32 = 25;
+pub const LEADERBOARD_MAX_LIMIT: u32 = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Period {
+    All,
+    Range { start: String, end: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeriodInfo {
+    pub period: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub month: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<String>,
+}
+
+pub fn resolve_period(
+    period: Option<&str>,
+    month: Option<&str>,
+    year: Option<&str>,
+) -> Result<(Period, PeriodInfo), String> {
+    match period.unwrap_or("all") {
+        "all" => Ok((
+            Period::All,
+            PeriodInfo { period: "all".to_string(), month: None, year: None },
+        )),
+        "month" => {
+            let (y, m) = match month {
+                Some(s) => parse_year_month(s)?,
+                None => {
+                    let now = Utc::now();
+                    (now.year(), now.month() as i32)
+                }
+            };
+            let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+            Ok((
+                Period::Range {
+                    start: format!("{:04}-{:02}-01T00:00:00+00:00", y, m),
+                    end:   format!("{:04}-{:02}-01T00:00:00+00:00", ny, nm),
+                },
+                PeriodInfo {
+                    period: "month".to_string(),
+                    month: Some(format!("{:04}-{:02}", y, m)),
+                    year: None,
+                },
+            ))
+        }
+        "year" => {
+            let y: i32 = match year {
+                Some(s) => s.parse().map_err(|_| format!("Virheellinen vuosi: {}", s))?,
+                None => Utc::now().year(),
+            };
+            if !(1900..=2100).contains(&y) {
+                return Err(format!("Vuosi alueen ulkopuolella: {}", y));
+            }
+            Ok((
+                Period::Range {
+                    start: format!("{:04}-01-01T00:00:00+00:00", y),
+                    end:   format!("{:04}-01-01T00:00:00+00:00", y + 1),
+                },
+                PeriodInfo {
+                    period: "year".to_string(),
+                    month: None,
+                    year: Some(format!("{:04}", y)),
+                },
+            ))
+        }
+        other => Err(format!("Tuntematon period: {}", other)),
+    }
+}
+
+fn parse_year_month(s: &str) -> Result<(i32, i32), String> {
+    let mut parts = s.split('-');
+    let y_str = parts.next().ok_or_else(|| format!("Virheellinen kuukausi: {}", s))?;
+    let m_str = parts.next().ok_or_else(|| format!("Virheellinen kuukausi: {}", s))?;
+    if parts.next().is_some() {
+        return Err(format!("Virheellinen kuukausi: {}", s));
+    }
+    let y: i32 = y_str.parse().map_err(|_| format!("Virheellinen vuosi: {}", y_str))?;
+    let m: i32 = m_str.parse().map_err(|_| format!("Virheellinen kuukausi: {}", m_str))?;
+    if !(1..=12).contains(&m) {
+        return Err(format!("Kuukausi alueen ulkopuolella: {}", m));
+    }
+    if !(1900..=2100).contains(&y) {
+        return Err(format!("Vuosi alueen ulkopuolella: {}", y));
+    }
+    Ok((y, m))
+}
+
+pub fn clamp_limit(requested: Option<u32>) -> u32 {
+    requested.unwrap_or(LEADERBOARD_DEFAULT_LIMIT).clamp(1, LEADERBOARD_MAX_LIMIT)
+}
 
 // --- Database ---
 
@@ -140,7 +273,11 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
              track_id   INTEGER NOT NULL REFERENCES tracks(id),
              created_at TEXT NOT NULL,
              UNIQUE(user_id, track_id)
-         );",
+         );
+
+         CREATE INDEX IF NOT EXISTS idx_runs_track_logged ON runs(track_id, logged_at);
+         CREATE INDEX IF NOT EXISTS idx_runs_user_time    ON runs(user_id, time_seconds);
+         CREATE INDEX IF NOT EXISTS idx_runs_logged_at    ON runs(logged_at);",
     )
 }
 
@@ -465,6 +602,9 @@ pub fn get_records(
     db: &Db,
     track_id: i64,
     user_id: Option<i64>,
+    period: &Period,
+    period_info: PeriodInfo,
+    limit: u32,
 ) -> Result<TrackRecords, String> {
     let conn = db.lock().unwrap();
 
@@ -476,21 +616,38 @@ pub fn get_records(
         .query_row(&sql, params![track_id], row_to_track)
         .map_err(|e| e.to_string())?;
 
-    let mut stmt = conn
-        .prepare(
-            "SELECT u.display_name, r.time_seconds, r.logged_at \
-             FROM runs r JOIN users u ON u.id = r.user_id \
-             WHERE r.track_id = ?1 \
-             ORDER BY r.time_seconds ASC LIMIT 10",
-        )
-        .map_err(|e| e.to_string())?;
+    let where_extra = match period {
+        Period::All => "",
+        Period::Range { .. } => " AND r.logged_at >= ?2 AND r.logged_at < ?3",
+    };
+    let sql_records = format!(
+        "SELECT u.display_name, r.time_seconds, r.logged_at \
+         FROM runs r JOIN users u ON u.id = r.user_id \
+         WHERE r.track_id = ?1{} \
+         ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT {}",
+        where_extra, limit
+    );
 
-    let records: Vec<RecordEntry> = stmt
-        .query_map(params![track_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, String>(2)?))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
+    let mut stmt = conn.prepare(&sql_records).map_err(|e| e.to_string())?;
+
+    let row_mapper = |row: &rusqlite::Row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, String>(2)?))
+    };
+    let records_iter: Vec<(String, f64, String)> = match period {
+        Period::All => stmt
+            .query_map(params![track_id], row_mapper)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect(),
+        Period::Range { start, end } => stmt
+            .query_map(params![track_id, start, end], row_mapper)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect(),
+    };
+
+    let records: Vec<RecordEntry> = records_iter
+        .into_iter()
         .enumerate()
         .map(|(i, (display_name, time_seconds, logged_at))| RecordEntry {
             rank: (i + 1) as i64,
@@ -500,6 +657,7 @@ pub fn get_records(
         })
         .collect();
 
+    // personal_best is all-time (matches Strava segment PR semantics), independent of period.
     let personal_best = if let Some(uid) = user_id {
         conn.query_row(
             "SELECT MIN(time_seconds) FROM runs WHERE track_id = ?1 AND user_id = ?2",
@@ -512,7 +670,129 @@ pub fn get_records(
         None
     };
 
-    Ok(TrackRecords { track, records, personal_best })
+    Ok(TrackRecords { track, records, personal_best, period_info })
+}
+
+// Cross-track leaderboard: best single run per user (Strava-style "fastest 400 m" board).
+// Period filter narrows both the ranking window and the personal-best lookup.
+pub fn get_leaderboard(
+    db: &Db,
+    user_id: Option<i64>,
+    period: &Period,
+    period_info: PeriodInfo,
+    limit: u32,
+) -> Result<Leaderboard, String> {
+    let conn = db.lock().unwrap();
+
+    // The inner subquery picks each user's best run in the period; the outer WHERE
+    // re-applies the period filter so users whose best falls outside the window
+    // don't leak in via the join.
+    let (sql, params_vec): (String, Vec<&dyn rusqlite::ToSql>) = match period {
+        Period::All => (
+            format!(
+                "SELECT u.id, u.display_name, r.time_seconds, r.logged_at, \
+                        r.track_id, t.name, t.city \
+                 FROM runs r \
+                 JOIN users u  ON u.id = r.user_id \
+                 JOIN tracks t ON t.id = r.track_id \
+                 WHERE r.id = ( \
+                     SELECT r2.id FROM runs r2 \
+                     WHERE r2.user_id = r.user_id \
+                     ORDER BY r2.time_seconds ASC, r2.logged_at ASC LIMIT 1 \
+                 ) \
+                 ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT {}",
+                limit
+            ),
+            vec![],
+        ),
+        Period::Range { start, end } => (
+            format!(
+                "SELECT u.id, u.display_name, r.time_seconds, r.logged_at, \
+                        r.track_id, t.name, t.city \
+                 FROM runs r \
+                 JOIN users u  ON u.id = r.user_id \
+                 JOIN tracks t ON t.id = r.track_id \
+                 WHERE r.id = ( \
+                     SELECT r2.id FROM runs r2 \
+                     WHERE r2.user_id = r.user_id \
+                       AND r2.logged_at >= ?1 AND r2.logged_at < ?2 \
+                     ORDER BY r2.time_seconds ASC, r2.logged_at ASC LIMIT 1 \
+                 ) \
+                 AND r.logged_at >= ?1 AND r.logged_at < ?2 \
+                 ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT {}",
+                limit
+            ),
+            vec![start as &dyn rusqlite::ToSql, end as &dyn rusqlite::ToSql],
+        ),
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows: Vec<(i64, String, f64, String, i64, Option<String>, Option<String>)> = stmt
+        .query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+            Ok((
+                row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+                row.get(4)?, row.get(5)?, row.get(6)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let entries: Vec<LeaderboardEntry> = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, (uid, display_name, time_seconds, logged_at, track_id, track_name, track_city))| {
+            LeaderboardEntry {
+                rank: (i + 1) as i64,
+                user_id: uid,
+                display_name,
+                time_seconds,
+                logged_at,
+                track_id,
+                track_name,
+                track_city,
+            }
+        })
+        .collect();
+
+    let personal_best = if let Some(uid) = user_id {
+        let (pb_sql, pb_params): (&str, Vec<&dyn rusqlite::ToSql>) = match period {
+            Period::All => (
+                "SELECT r.time_seconds, r.logged_at, r.track_id, t.name, t.city \
+                 FROM runs r JOIN tracks t ON t.id = r.track_id \
+                 WHERE r.user_id = ?1 \
+                 ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT 1",
+                vec![&uid as &dyn rusqlite::ToSql],
+            ),
+            Period::Range { start, end } => (
+                "SELECT r.time_seconds, r.logged_at, r.track_id, t.name, t.city \
+                 FROM runs r JOIN tracks t ON t.id = r.track_id \
+                 WHERE r.user_id = ?1 AND r.logged_at >= ?2 AND r.logged_at < ?3 \
+                 ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT 1",
+                vec![&uid as &dyn rusqlite::ToSql,
+                     start as &dyn rusqlite::ToSql,
+                     end as &dyn rusqlite::ToSql],
+            ),
+        };
+        conn.query_row(
+            pb_sql,
+            rusqlite::params_from_iter(pb_params.iter()),
+            |row| {
+                Ok(PersonalBestEntry {
+                    time_seconds: row.get(0)?,
+                    logged_at: row.get(1)?,
+                    track_id: row.get(2)?,
+                    track_name: row.get(3)?,
+                    track_city: row.get(4)?,
+                })
+            },
+        )
+        .ok()
+    } else {
+        None
+    };
+
+    Ok(Leaderboard { entries, personal_best, period_info })
 }
 
 pub fn log_run(db: &Db, user_id: i64, track_id: i64, time_seconds: f64) -> Result<(), String> {
@@ -873,5 +1153,230 @@ mod favorites_tests {
 
         let without_user = get_track(&db, track_a, None).unwrap().unwrap();
         assert!(!without_user.is_favorite);
+    }
+}
+
+#[cfg(test)]
+mod leaderboard_tests {
+    use super::*;
+
+    fn info_all() -> PeriodInfo {
+        PeriodInfo { period: "all".to_string(), month: None, year: None }
+    }
+
+    fn insert_run(conn: &Connection, user_id: i64, track_id: i64, t: f64, ts: &str) {
+        conn.execute(
+            "INSERT INTO runs (user_id, track_id, time_seconds, logged_at) VALUES (?1, ?2, ?3, ?4)",
+            params![user_id, track_id, t, ts],
+        )
+        .unwrap();
+    }
+
+    fn setup() -> (Db, i64, i64, i64, i64) {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO users (email, display_name, password_hash, created_at) \
+             VALUES ('a@e.c', 'Alice', 'h', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+        let alice = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO users (email, display_name, password_hash, created_at) \
+             VALUES ('b@e.c', 'Bob', 'h', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+        let bob = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tracks (lipas_id, name, lat, lon, type_code, status, last_synced_at, city) \
+             VALUES (1, 'A-rata', 60.0, 24.0, 1220, 'active', '2026-05-05', 'Helsinki')",
+            [],
+        )
+        .unwrap();
+        let track_a = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tracks (lipas_id, name, lat, lon, type_code, status, last_synced_at, city) \
+             VALUES (2, 'B-rata', 60.1, 24.1, 1220, 'active', '2026-05-05', 'Espoo')",
+            [],
+        )
+        .unwrap();
+        let track_b = conn.last_insert_rowid();
+        let db: Db = Arc::new(Mutex::new(conn));
+        (db, alice, bob, track_a, track_b)
+    }
+
+    #[test]
+    fn period_all_returns_records_ordered_by_time() {
+        let (db, alice, bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, alice, track_a, 65.0, "2026-03-01T10:00:00+00:00");
+            insert_run(&conn, bob,   track_a, 60.0, "2026-04-01T10:00:00+00:00");
+            insert_run(&conn, alice, track_a, 70.0, "2026-05-01T10:00:00+00:00");
+        }
+        let out = get_records(&db, track_a, None, &Period::All, info_all(), 10).unwrap();
+        assert_eq!(out.records.len(), 3);
+        assert_eq!(out.records[0].display_name, "Bob");
+        assert_eq!(out.records[0].time_seconds, 60.0);
+        assert_eq!(out.records[0].rank, 1);
+        assert_eq!(out.records[2].time_seconds, 70.0);
+    }
+
+    #[test]
+    fn period_month_filters_records_by_logged_at() {
+        let (db, alice, bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, alice, track_a, 60.0, "2026-04-15T10:00:00+00:00");
+            insert_run(&conn, bob,   track_a, 62.0, "2026-05-10T10:00:00+00:00");
+            insert_run(&conn, alice, track_a, 64.0, "2026-05-20T10:00:00+00:00");
+        }
+        let (p, info) = resolve_period(Some("month"), Some("2026-05"), None).unwrap();
+        let out = get_records(&db, track_a, None, &p, info, 10).unwrap();
+        assert_eq!(out.records.len(), 2);
+        assert!(out.records.iter().all(|r| r.logged_at.starts_with("2026-05")));
+        assert_eq!(out.records[0].time_seconds, 62.0);
+    }
+
+    #[test]
+    fn period_year_boundary_includes_dec_excludes_jan_next() {
+        let (db, alice, _bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, alice, track_a, 60.0, "2025-12-31T23:59:59+00:00");
+            insert_run(&conn, alice, track_a, 61.0, "2026-01-01T00:00:00+00:00");
+        }
+        let (p, info) = resolve_period(Some("year"), None, Some("2025")).unwrap();
+        let out = get_records(&db, track_a, None, &p, info, 10).unwrap();
+        assert_eq!(out.records.len(), 1);
+        assert_eq!(out.records[0].time_seconds, 60.0);
+    }
+
+    #[test]
+    fn records_tie_break_earlier_logged_at_wins() {
+        let (db, alice, bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, bob,   track_a, 60.0, "2026-05-10T10:00:00+00:00");
+            insert_run(&conn, alice, track_a, 60.0, "2026-05-01T10:00:00+00:00");
+        }
+        let out = get_records(&db, track_a, None, &Period::All, info_all(), 10).unwrap();
+        assert_eq!(out.records[0].display_name, "Alice");
+        assert_eq!(out.records[1].display_name, "Bob");
+    }
+
+    #[test]
+    fn get_records_personal_best_is_all_time_not_period_scoped() {
+        let (db, alice, _bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, alice, track_a, 55.0, "2025-08-01T10:00:00+00:00");
+            insert_run(&conn, alice, track_a, 65.0, "2026-05-10T10:00:00+00:00");
+        }
+        let (p, info) = resolve_period(Some("month"), Some("2026-05"), None).unwrap();
+        let out = get_records(&db, track_a, Some(alice), &p, info, 10).unwrap();
+        assert_eq!(out.records.len(), 1);
+        assert_eq!(out.personal_best, Some(55.0));
+    }
+
+    #[test]
+    fn leaderboard_picks_best_run_per_user() {
+        let (db, alice, bob, track_a, track_b) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, alice, track_a, 65.0, "2026-03-01T10:00:00+00:00");
+            insert_run(&conn, alice, track_b, 60.0, "2026-04-01T10:00:00+00:00");
+            insert_run(&conn, alice, track_a, 70.0, "2026-05-01T10:00:00+00:00");
+            insert_run(&conn, bob,   track_a, 62.0, "2026-04-15T10:00:00+00:00");
+        }
+        let board = get_leaderboard(&db, None, &Period::All, info_all(), 25).unwrap();
+        assert_eq!(board.entries.len(), 2);
+        assert_eq!(board.entries[0].display_name, "Alice");
+        assert_eq!(board.entries[0].time_seconds, 60.0);
+        assert_eq!(board.entries[0].track_id, track_b);
+        assert_eq!(board.entries[0].track_name.as_deref(), Some("B-rata"));
+        assert_eq!(board.entries[1].display_name, "Bob");
+        assert_eq!(board.entries[1].time_seconds, 62.0);
+    }
+
+    #[test]
+    fn leaderboard_excludes_users_with_no_runs_in_period() {
+        let (db, alice, bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, alice, track_a, 55.0, "2025-08-01T10:00:00+00:00");
+            insert_run(&conn, bob,   track_a, 62.0, "2026-05-10T10:00:00+00:00");
+        }
+        let (p, info) = resolve_period(Some("month"), Some("2026-05"), None).unwrap();
+        let board = get_leaderboard(&db, None, &p, info, 25).unwrap();
+        assert_eq!(board.entries.len(), 1);
+        assert_eq!(board.entries[0].display_name, "Bob");
+    }
+
+    #[test]
+    fn leaderboard_personal_best_returned_when_authed_and_scoped_to_period() {
+        let (db, alice, _bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            insert_run(&conn, alice, track_a, 55.0, "2025-08-01T10:00:00+00:00");
+            insert_run(&conn, alice, track_a, 65.0, "2026-05-10T10:00:00+00:00");
+        }
+        let (p, info) = resolve_period(Some("year"), None, Some("2026")).unwrap();
+        let board = get_leaderboard(&db, Some(alice), &p, info, 25).unwrap();
+        let pb = board.personal_best.unwrap();
+        assert_eq!(pb.time_seconds, 65.0);
+
+        let board_all = get_leaderboard(&db, Some(alice), &Period::All, info_all(), 25).unwrap();
+        assert_eq!(board_all.personal_best.unwrap().time_seconds, 55.0);
+
+        let board_anon = get_leaderboard(&db, None, &Period::All, info_all(), 25).unwrap();
+        assert!(board_anon.personal_best.is_none());
+    }
+
+    #[test]
+    fn resolve_period_defaults_to_all() {
+        let (p, info) = resolve_period(None, None, None).unwrap();
+        assert!(matches!(p, Period::All));
+        assert_eq!(info.period, "all");
+    }
+
+    #[test]
+    fn resolve_period_rejects_invalid_month_and_year() {
+        assert!(resolve_period(Some("month"), Some("2026-13"), None).is_err());
+        assert!(resolve_period(Some("month"), Some("not-a-month"), None).is_err());
+        assert!(resolve_period(Some("year"), None, Some("1800")).is_err());
+        assert!(resolve_period(Some("weekday"), None, None).is_err());
+    }
+
+    #[test]
+    fn period_year_info_echoes_year_string() {
+        let (_, info) = resolve_period(Some("year"), None, Some("2026")).unwrap();
+        assert_eq!(info.year.as_deref(), Some("2026"));
+        let (_, info_month) = resolve_period(Some("month"), Some("2026-05"), None).unwrap();
+        assert_eq!(info_month.month.as_deref(), Some("2026-05"));
+    }
+
+    #[test]
+    fn records_limit_clamped() {
+        let (db, alice, _bob, track_a, _) = setup();
+        {
+            let conn = db.lock().unwrap();
+            for i in 0..30 {
+                insert_run(
+                    &conn,
+                    alice,
+                    track_a,
+                    60.0 + i as f64,
+                    &format!("2026-05-{:02}T10:00:00+00:00", (i % 28) + 1),
+                );
+            }
+        }
+        let out = get_records(&db, track_a, None, &Period::All, info_all(), 5).unwrap();
+        assert_eq!(out.records.len(), 5);
+        assert_eq!(clamp_limit(Some(9999)), LEADERBOARD_MAX_LIMIT);
+        assert_eq!(clamp_limit(Some(0)), 1);
+        assert_eq!(clamp_limit(None), LEADERBOARD_DEFAULT_LIMIT);
     }
 }

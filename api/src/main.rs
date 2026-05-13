@@ -11,10 +11,10 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 
 use ratakierros_api::{
-    add_favorite, analyze_gpx, fetch_and_cache_lipas_tracks, finalize_legacy_migration,
-    get_records, get_track, list_tracks, log_run, login_user, migrate_db, register_user,
-    remove_favorite, tracks_count, verify_jwt, AnalyzeError, Claims, Db,
-    DEFAULT_TARGET_DISTANCE_M,
+    add_favorite, analyze_gpx, clamp_limit, fetch_and_cache_lipas_tracks,
+    finalize_legacy_migration, get_leaderboard, get_records, get_track, list_tracks, log_run,
+    login_user, migrate_db, register_user, remove_favorite, resolve_period, tracks_count,
+    verify_jwt, AnalyzeError, Claims, Db, DEFAULT_TARGET_DISTANCE_M,
 };
 
 // --- Error type ---
@@ -93,6 +93,14 @@ struct TracksQuery {
     lat: Option<f64>,
     lon: Option<f64>,
     q: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PeriodQuery {
+    period: Option<String>,
+    month: Option<String>,
+    year: Option<String>,
+    limit: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -179,9 +187,39 @@ async fn remove_favorite_handler(
 async fn records_handler(
     Extension(db): Extension<Db>,
     Path(id): Path<i64>,
+    Query(q): Query<PeriodQuery>,
     OptionalAuthUser(user_id): OptionalAuthUser,
 ) -> impl IntoResponse {
-    match get_records(&db, id, user_id) {
+    let (period, period_info) = match resolve_period(
+        q.period.as_deref(),
+        q.month.as_deref(),
+        q.year.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return AppError::BadRequest(e).into_response(),
+    };
+    let limit = clamp_limit(q.limit);
+    match get_records(&db, id, user_id, &period, period_info, limit) {
+        Ok(data) => Json(data).into_response(),
+        Err(e) => AppError::Internal(e).into_response(),
+    }
+}
+
+async fn leaderboard_handler(
+    Extension(db): Extension<Db>,
+    Query(q): Query<PeriodQuery>,
+    OptionalAuthUser(user_id): OptionalAuthUser,
+) -> impl IntoResponse {
+    let (period, period_info) = match resolve_period(
+        q.period.as_deref(),
+        q.month.as_deref(),
+        q.year.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => return AppError::BadRequest(e).into_response(),
+    };
+    let limit = clamp_limit(q.limit);
+    match get_leaderboard(&db, user_id, &period, period_info, limit) {
         Ok(data) => Json(data).into_response(),
         Err(e) => AppError::Internal(e).into_response(),
     }
@@ -341,6 +379,7 @@ async fn main() {
         .route("/api/tracks", get(tracks_handler))
         .route("/api/tracks/:id", get(track_handler))
         .route("/api/tracks/:id/records", get(records_handler))
+        .route("/api/leaderboard", get(leaderboard_handler))
         .route("/api/runs", post(log_run_handler))
         .route(
             "/api/favorites/:track_id",
