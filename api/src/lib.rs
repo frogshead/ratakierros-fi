@@ -350,7 +350,18 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 
          CREATE INDEX IF NOT EXISTS idx_runs_track_logged ON runs(track_id, logged_at);
          CREATE INDEX IF NOT EXISTS idx_runs_user_time    ON runs(user_id, time_seconds);
-         CREATE INDEX IF NOT EXISTS idx_runs_logged_at    ON runs(logged_at);",
+         CREATE INDEX IF NOT EXISTS idx_runs_logged_at    ON runs(logged_at);
+
+         CREATE TABLE IF NOT EXISTS finnish_records (
+             id           INTEGER PRIMARY KEY AUTOINCREMENT,
+             category     TEXT    UNIQUE NOT NULL,
+             time_seconds REAL    NOT NULL,
+             holder_name  TEXT,
+             set_year     INTEGER,
+             set_location TEXT,
+             notes        TEXT,
+             updated_at   TEXT    NOT NULL
+         );",
     )?;
 
     // Phase 2 column additions on `users`. Idempotent: skipped when the columns
@@ -360,6 +371,30 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute_batch(
             "ALTER TABLE users ADD COLUMN birth_year INTEGER;
              ALTER TABLE users ADD COLUMN gender TEXT;",
+        )?;
+    }
+
+    seed_finnish_records(conn)?;
+    Ok(())
+}
+
+// Seed the curated open-class Finnish 400 m records. INSERT OR IGNORE keeps
+// hand-edits from an admin (or a future curated-CSV ingest) intact across
+// restarts. Masters / N-band rows are intentionally left for a follow-up
+// import — we couldn't identify a public SUL/Tilastopaja API at the time of
+// writing, and only the two open records are sourceable from Wikipedia.
+fn seed_finnish_records(conn: &Connection) -> rusqlite::Result<()> {
+    let now = Utc::now().to_rfc3339();
+    let seeds = [
+        ("OPEN_M", 45.49_f64, "Markku Kukkoaho", 1972_i64, "München (OK)"),
+        ("OPEN_N", 50.14_f64, "Riitta Salin",    1974_i64, "Rooma (EM)"),
+    ];
+    for (cat, t, name, year, loc) in seeds {
+        conn.execute(
+            "INSERT OR IGNORE INTO finnish_records \
+             (category, time_seconds, holder_name, set_year, set_location, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![cat, t, name, year, loc, now],
         )?;
     }
     Ok(())
@@ -893,6 +928,53 @@ pub fn get_leaderboard(
     };
 
     Ok(Leaderboard { entries, personal_best, period_info })
+}
+
+// --- Finnish records (Phase 3) ---
+//
+// Reference data: national / masters records over 400 m. The seed only carries
+// the two open-class records (M, N); masters bands are added by a curator
+// later. See README / PR description for the data-source caveat — no public
+// SUL or Tilastopaja API exists at the time of writing.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinnishRecord {
+    pub category: String,           // 'OPEN_M', 'OPEN_N', 'M40', 'N55', ...
+    pub time_seconds: f64,
+    pub holder_name: Option<String>,
+    pub set_year: Option<i64>,
+    pub set_location: Option<String>,
+    pub notes: Option<String>,
+    pub updated_at: String,
+}
+
+pub fn list_finnish_records(db: &Db) -> Result<Vec<FinnishRecord>, String> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT category, time_seconds, holder_name, set_year, set_location, notes, updated_at \
+             FROM finnish_records \
+             ORDER BY \
+                 CASE category WHEN 'OPEN_M' THEN 0 WHEN 'OPEN_N' THEN 1 ELSE 2 END, \
+                 category",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<FinnishRecord> = stmt
+        .query_map([], |row| {
+            Ok(FinnishRecord {
+                category:     row.get(0)?,
+                time_seconds: row.get(1)?,
+                holder_name:  row.get(2)?,
+                set_year:     row.get(3)?,
+                set_location: row.get(4)?,
+                notes:        row.get(5)?,
+                updated_at:   row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
 }
 
 pub fn log_run(db: &Db, user_id: i64, track_id: i64, time_seconds: f64) -> Result<(), String> {
@@ -1792,5 +1874,83 @@ mod phase2_tests {
         assert!(update_user_profile(&db, uid, "V", Some(1800), None).is_err());
         assert!(update_user_profile(&db, uid, "V", Some(2200), None).is_err());
         assert!(update_user_profile(&db, uid, "V", None, Some("X")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod phase3_tests {
+    use super::*;
+
+    fn fresh_db() -> Db {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        Arc::new(Mutex::new(conn))
+    }
+
+    #[test]
+    fn init_db_seeds_open_class_records() {
+        let db = fresh_db();
+        let rows = list_finnish_records(&db).unwrap();
+        let cats: Vec<&str> = rows.iter().map(|r| r.category.as_str()).collect();
+        // The two seeded entries are present and OPEN_M sorts before OPEN_N.
+        assert_eq!(cats, vec!["OPEN_M", "OPEN_N"]);
+
+        let m = &rows[0];
+        assert_eq!(m.time_seconds, 45.49);
+        assert_eq!(m.holder_name.as_deref(), Some("Markku Kukkoaho"));
+        assert_eq!(m.set_year, Some(1972));
+
+        let n = &rows[1];
+        assert_eq!(n.time_seconds, 50.14);
+        assert_eq!(n.holder_name.as_deref(), Some("Riitta Salin"));
+    }
+
+    #[test]
+    fn seed_does_not_overwrite_curator_edits() {
+        let db = fresh_db();
+        // Curator updates the men's open record.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "UPDATE finnish_records SET time_seconds = 45.10, holder_name = 'Test Curator' \
+                 WHERE category = 'OPEN_M'",
+                [],
+            )
+            .unwrap();
+        }
+        // Re-running init_db must NOT overwrite (INSERT OR IGNORE on the unique
+        // `category` column is the guarantee we're relying on).
+        {
+            let conn = db.lock().unwrap();
+            init_db(&conn).unwrap();
+        }
+        let rows = list_finnish_records(&db).unwrap();
+        let m = rows.iter().find(|r| r.category == "OPEN_M").unwrap();
+        assert_eq!(m.time_seconds, 45.10);
+        assert_eq!(m.holder_name.as_deref(), Some("Test Curator"));
+    }
+
+    #[test]
+    fn list_returns_masters_record_inserted_by_admin() {
+        let db = fresh_db();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO finnish_records \
+                 (category, time_seconds, holder_name, set_year, set_location, updated_at) \
+                 VALUES ('M40', 49.50, 'Aki Aikuinen', 2014, 'Lahti', '2026-05-13T00:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        }
+        let rows = list_finnish_records(&db).unwrap();
+        let m40 = rows.iter().find(|r| r.category == "M40").unwrap();
+        assert_eq!(m40.time_seconds, 49.50);
+        assert_eq!(m40.holder_name.as_deref(), Some("Aki Aikuinen"));
+        assert_eq!(m40.set_year, Some(2014));
+        // OPEN_M / OPEN_N must still sort first.
+        assert_eq!(rows[0].category, "OPEN_M");
+        assert_eq!(rows[1].category, "OPEN_N");
+        assert_eq!(rows[2].category, "M40");
     }
 }

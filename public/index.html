@@ -739,6 +739,34 @@
       text-align: center;
       font-size: 0.9rem;
     }
+
+    /* ── Suomen ennätys banner ───────────────────────────── */
+    .lb-records {
+      padding: 0.7rem 1rem 0.4rem 1rem;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .lb-records:empty { display: none; }
+    .lb-record-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      font-size: 0.82rem;
+      color: var(--text);
+    }
+    .lb-record-row .lb-record-label {
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 0.7rem;
+      letter-spacing: 0.04em;
+      min-width: 6.5rem;
+    }
+    .lb-record-row .lb-record-time { font-weight: 700; }
+    .lb-record-row .lb-record-meta { color: var(--muted); font-size: 0.78rem; }
   </style>
 </head>
 <body>
@@ -808,6 +836,7 @@
       </select>
     </div>
   </div>
+  <div class="lb-records" id="lb-finnish-records"></div>
   <div class="lb-content" id="lb-content">
     <div class="lb-empty">Ladataan…</div>
   </div>
@@ -848,6 +877,7 @@ const state = {
   leaderboardPeriod:   'all',
   leaderboardCategory: '',
   profile:             null,      // { display_name, birth_year, gender } once /api/me has loaded
+  finnishRecords:      null,      // { CATEGORY: { time_seconds, ... } } once /api/finnish-records has loaded
 };
 
 const PERIOD_LABELS = {
@@ -1561,7 +1591,56 @@ function populateLeaderboardCategorySelect() {
   sel.addEventListener('change', () => {
     state.leaderboardCategory = sel.value;
     loadLeaderboard();
+    renderFinnishRecordsBanner();
   });
+}
+
+// ── Suomen ennätys banner ─────────────────────────────────
+async function ensureFinnishRecords() {
+  if (state.finnishRecords) return state.finnishRecords;
+  try {
+    const data = await api('/api/finnish-records');
+    state.finnishRecords = Object.fromEntries(
+      (data.records || []).map(r => [r.category, r])
+    );
+  } catch {
+    state.finnishRecords = {};
+  }
+  return state.finnishRecords;
+}
+
+function formatFinnishRecord(label, r) {
+  if (!r) return '';
+  const meta = [r.holder_name, r.set_year, r.set_location].filter(Boolean).map(esc).join(', ');
+  return `<div class="lb-record-row">
+    <span class="lb-record-label">${esc(label)}</span>
+    <span class="lb-record-time">${fmtTime(r.time_seconds)}</span>
+    ${meta ? `<span class="lb-record-meta">${meta}</span>` : ''}
+  </div>`;
+}
+
+function renderFinnishRecordsBanner() {
+  const banner = document.getElementById('lb-finnish-records');
+  if (!banner) return;
+  const recs = state.finnishRecords || {};
+  const cat  = state.leaderboardCategory;
+  const rows = [];
+
+  if (!cat) {
+    // No filter: show both open-class records as the reference.
+    rows.push(formatFinnishRecord('SE miehet',  recs['OPEN_M']));
+    rows.push(formatFinnishRecord('SE naiset',  recs['OPEN_N']));
+  } else {
+    const isMen = cat.startsWith('M');
+    rows.push(formatFinnishRecord(
+      isMen ? 'SE avoin (M)' : 'SE avoin (N)',
+      recs[isMen ? 'OPEN_M' : 'OPEN_N']
+    ));
+    if (recs[cat]) {
+      rows.push(formatFinnishRecord(`SE ${cat}`, recs[cat]));
+    }
+  }
+  banner.innerHTML = rows.filter(Boolean).join('');
 }
 
 function renderLeaderboard({ entries, personal_best }) {
@@ -1625,6 +1704,7 @@ function applyRoute() {
   document.body.classList.toggle('view-leaderboard', wantsLeaderboard);
   if (wantsLeaderboard) {
     populateLeaderboardCategorySelect();
+    ensureFinnishRecords().then(renderFinnishRecordsBanner);
     loadLeaderboard();
   }
 }

@@ -66,6 +66,24 @@ test('Clicking a leaderboard track link navigates back to the map detail view', 
   await expect(page.locator('#detail-title')).toHaveText(/.+/, { timeout: 10_000 });
 });
 
+test('Suomen ennätys banner shows the seeded open-class records on the Pörssi view', async ({ page }) => {
+  // Phase 3: GET /api/finnish-records returns OPEN_M (45.49 Kukkoaho 1972)
+  // and OPEN_N (50.14 Salin 1974). With no category filter the banner must
+  // surface both rows above the table.
+  await page.goto('/#/leaderboard');
+  const banner = page.locator('#lb-finnish-records');
+  await expect(banner).toContainText('Markku Kukkoaho', { timeout: 15_000 });
+  await expect(banner).toContainText('Riitta Salin');
+  await expect(banner).toContainText('45.49');
+
+  // Selecting a men's masters band keeps the men's open record and drops the
+  // women's row — there is no curated M50 record in the seed, so only one row
+  // should be visible.
+  await page.locator('#lb-category-select').selectOption('M50');
+  await expect(banner).toContainText('Markku Kukkoaho');
+  await expect(banner).not.toContainText('Riitta Salin');
+});
+
 test('Category dropdown filters leaderboard to a single WMA band', async ({ page }) => {
   // Seed: Alice = N40 (born 1984), Bob = M50 (born 1974), Carol no profile.
   // The category options are populated client-side from a fixed list.

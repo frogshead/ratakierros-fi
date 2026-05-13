@@ -13,9 +13,9 @@ use tower_http::cors::CorsLayer;
 use ratakierros_api::{
     add_favorite, analyze_gpx, clamp_limit, fetch_and_cache_lipas_tracks,
     finalize_legacy_migration, get_leaderboard, get_records, get_track, get_user_profile,
-    list_tracks, log_run, login_user, make_jwt, migrate_db, register_user, remove_favorite,
-    resolve_age_category, resolve_period, tracks_count, update_user_profile, verify_jwt,
-    AnalyzeError, Claims, Db, DEFAULT_TARGET_DISTANCE_M,
+    list_finnish_records, list_tracks, log_run, login_user, make_jwt, migrate_db, register_user,
+    remove_favorite, resolve_age_category, resolve_period, tracks_count, update_user_profile,
+    verify_jwt, AnalyzeError, Claims, Db, DEFAULT_TARGET_DISTANCE_M,
 };
 
 // --- Error type ---
@@ -261,6 +261,13 @@ async fn leaderboard_handler(
     }
 }
 
+async fn finnish_records_handler(Extension(db): Extension<Db>) -> impl IntoResponse {
+    match list_finnish_records(&db) {
+        Ok(records) => Json(serde_json::json!({ "records": records })).into_response(),
+        Err(e) => AppError::Internal(e).into_response(),
+    }
+}
+
 async fn me_handler(
     Extension(db): Extension<Db>,
     AuthUser(user_id): AuthUser,
@@ -470,6 +477,7 @@ async fn main() {
         .route("/api/tracks/:id", get(track_handler))
         .route("/api/tracks/:id/records", get(records_handler))
         .route("/api/leaderboard", get(leaderboard_handler))
+        .route("/api/finnish-records", get(finnish_records_handler))
         .route("/api/runs", post(log_run_handler))
         .route(
             "/api/favorites/:track_id",
