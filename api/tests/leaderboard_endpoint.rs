@@ -13,8 +13,9 @@ use axum::{
     routing::get,
     Router,
 };
+use chrono::Datelike;
 use ratakierros_api::{
-    clamp_limit, get_leaderboard, get_records, init_db, resolve_period, Db,
+    clamp_limit, get_leaderboard, get_records, init_db, resolve_age_category, resolve_period, Db,
 };
 use rusqlite::{params, Connection};
 use serde::Deserialize;
@@ -26,6 +27,7 @@ struct PeriodQuery {
     period: Option<String>,
     month: Option<String>,
     year: Option<String>,
+    category: Option<String>,
     limit: Option<u32>,
 }
 
@@ -34,7 +36,7 @@ async fn records_handler(
     Path(id): Path<i64>,
     Query(q): Query<PeriodQuery>,
 ) -> Response {
-    let (period, info) = match resolve_period(
+    let (period, mut info) = match resolve_period(
         q.period.as_deref(),
         q.month.as_deref(),
         q.year.as_deref(),
@@ -42,7 +44,15 @@ async fn records_handler(
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-    match get_records(&db, id, None, &period, info, clamp_limit(q.limit)) {
+    let cat = match resolve_age_category(q.category.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if let Some((c, _)) = &cat {
+        info.category = Some(c.as_code());
+    }
+    let filter = cat.as_ref().map(|(_, f)| f);
+    match get_records(&db, id, None, &period, info, filter, clamp_limit(q.limit)) {
         Ok(d) => Json(serde_json::to_value(d).unwrap()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
@@ -52,7 +62,7 @@ async fn leaderboard_handler(
     Extension(db): Extension<Db>,
     Query(q): Query<PeriodQuery>,
 ) -> Response {
-    let (period, info) = match resolve_period(
+    let (period, mut info) = match resolve_period(
         q.period.as_deref(),
         q.month.as_deref(),
         q.year.as_deref(),
@@ -60,7 +70,15 @@ async fn leaderboard_handler(
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-    match get_leaderboard(&db, None, &period, info, clamp_limit(q.limit)) {
+    let cat = match resolve_age_category(q.category.as_deref()) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if let Some((c, _)) = &cat {
+        info.category = Some(c.as_code());
+    }
+    let filter = cat.as_ref().map(|(_, f)| f);
+    match get_leaderboard(&db, None, &period, info, filter, clamp_limit(q.limit)) {
         Ok(d) => Json(serde_json::to_value(d).unwrap()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
@@ -70,17 +88,20 @@ fn build_app() -> (Router, i64) {
     let conn = Connection::open_in_memory().unwrap();
     init_db(&conn).unwrap();
 
+    // Profiles drive the category-filter test below. Born offsets relative to
+    // the current year so the WMA band lookup is stable as the calendar moves.
+    let now_year = chrono::Utc::now().year();
     conn.execute(
-        "INSERT INTO users (email, display_name, password_hash, created_at) \
-         VALUES ('a@e.c', 'Alice', 'h', '2026-01-01')",
-        [],
+        "INSERT INTO users (email, display_name, password_hash, created_at, birth_year, gender) \
+         VALUES ('a@e.c', 'Alice', 'h', '2026-01-01', ?1, 'N')",
+        params![now_year - 42], // currently N40
     )
     .unwrap();
     let alice = conn.last_insert_rowid();
     conn.execute(
-        "INSERT INTO users (email, display_name, password_hash, created_at) \
-         VALUES ('b@e.c', 'Bob', 'h', '2026-01-01')",
-        [],
+        "INSERT INTO users (email, display_name, password_hash, created_at, birth_year, gender) \
+         VALUES ('b@e.c', 'Bob', 'h', '2026-01-01', ?1, 'M')",
+        params![now_year - 52], // currently M50
     )
     .unwrap();
     let bob = conn.last_insert_rowid();
@@ -219,6 +240,34 @@ async fn leaderboard_period_month_excludes_users_with_no_runs_in_window() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["display_name"], "Alice");
     assert_eq!(entries[0]["time_seconds"], 65.0);
+}
+
+#[tokio::test]
+async fn leaderboard_category_filter_includes_only_matching_users() {
+    let (app, _track_id) = build_app();
+    // Alice is N40, Bob is M50 → ?category=M50 should leave only Bob.
+    let req = Request::builder()
+        .uri("/api/leaderboard?category=M50")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json_of(resp).await;
+    assert_eq!(v["category"], "M50");
+    let entries = v["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["display_name"], "Bob");
+}
+
+#[tokio::test]
+async fn leaderboard_rejects_invalid_category() {
+    let (app, _track_id) = build_app();
+    let req = Request::builder()
+        .uri("/api/leaderboard?category=X99")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

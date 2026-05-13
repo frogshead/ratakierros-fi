@@ -66,6 +66,26 @@ test('Clicking a leaderboard track link navigates back to the map detail view', 
   await expect(page.locator('#detail-title')).toHaveText(/.+/, { timeout: 10_000 });
 });
 
+test('Category dropdown filters leaderboard to a single WMA band', async ({ page }) => {
+  // Seed: Alice = N40 (born 1984), Bob = M50 (born 1974), Carol no profile.
+  // The category options are populated client-side from a fixed list.
+  await page.goto('/#/leaderboard');
+  await expect(page.locator('.lb-table tbody tr').first()).toBeVisible({ timeout: 15_000 });
+
+  const sel = page.locator('#lb-category-select');
+  await expect(sel).toBeVisible();
+  await sel.selectOption('M50');
+
+  // Bob is the only seeded user in M50.
+  const rows = page.locator('.lb-table tbody tr');
+  await expect(rows).toHaveCount(1, { timeout: 5_000 });
+  await expect(rows.first()).toContainText('E2E Bob');
+
+  // Switch to a band with no seeded users — empty state should appear.
+  await sel.selectOption('N90');
+  await expect(page.locator('.lb-empty')).toBeVisible();
+});
+
 test('Per-track records panel exposes a working period selector', async ({ page }) => {
   await page.goto('/');
   const firstCard = page.locator('.track-card').first();

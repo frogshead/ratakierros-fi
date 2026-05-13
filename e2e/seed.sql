@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS users (
     email         TEXT UNIQUE NOT NULL,
     display_name  TEXT NOT NULL,
     password_hash TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    birth_year    INTEGER,
+    gender        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -63,10 +65,13 @@ VALUES
 
 -- Test users + historical runs for leaderboard tests. password_hash is a stub
 -- (login flow is exercised separately by other tests).
-INSERT OR IGNORE INTO users (email, display_name, password_hash, created_at) VALUES
-    ('e2e-alice@example.com', 'E2E Alice', 'stub', '2025-01-01T00:00:00Z'),
-    ('e2e-bob@example.com',   'E2E Bob',   'stub', '2025-01-01T00:00:00Z'),
-    ('e2e-carol@example.com', 'E2E Carol', 'stub', '2025-01-01T00:00:00Z');
+-- Alice and Bob carry birth_year+gender so the Phase 2 age-category filter has
+-- deterministic data to assert against. Carol intentionally has neither — she
+-- must drop out of every category-scoped board.
+INSERT OR IGNORE INTO users (email, display_name, password_hash, created_at, birth_year, gender) VALUES
+    ('e2e-alice@example.com', 'E2E Alice', 'stub', '2025-01-01T00:00:00Z', 1984, 'N'),
+    ('e2e-bob@example.com',   'E2E Bob',   'stub', '2025-01-01T00:00:00Z', 1974, 'M'),
+    ('e2e-carol@example.com', 'E2E Carol', 'stub', '2025-01-01T00:00:00Z', NULL, NULL);
 
 -- Cross-track runs in fixed past dates so the all-time leaderboard is
 -- deterministic. Bob holds the overall best (58.40 at Helsinki).
