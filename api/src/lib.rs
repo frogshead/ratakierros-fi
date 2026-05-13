@@ -143,6 +143,77 @@ pub struct PeriodInfo {
     pub month: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<String>,
+    // Echoed back when a `category=` filter was applied. Format: "M40", "N55" etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+}
+
+// --- WMA age category ---
+//
+// Bands: M30..M90 and N30..N90 in 5-year increments (World Masters Athletics
+// convention; we use Finnish 'N' for women internally to match the gender
+// stored on `users.gender`). Age is computed as `ref_year - birth_year`,
+// snapshot to the current UTC year — i.e. the leaderboard shows users who
+// are currently in the requested band, independent of when they ran.
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgeCategory {
+    pub gender: char, // 'M' | 'N'
+    pub band: u32,    // 30, 35, ..., 90
+}
+
+impl AgeCategory {
+    pub fn as_code(&self) -> String {
+        format!("{}{}", self.gender, self.band)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CategoryFilter {
+    pub min_birth_year: i32,
+    pub max_birth_year: i32,
+    pub gender: char,
+}
+
+pub fn parse_age_category(s: &str) -> Result<AgeCategory, String> {
+    if s.len() < 2 {
+        return Err(format!("Tuntematon ikäluokka: {}", s));
+    }
+    let first = s.as_bytes()[0] as char;
+    let gender = match first.to_ascii_uppercase() {
+        'M' => 'M',
+        'W' | 'N' | 'F' => 'N',
+        _ => return Err(format!("Tuntematon sukupuoli ikäluokassa: {}", s)),
+    };
+    let band: u32 = s[1..]
+        .parse()
+        .map_err(|_| format!("Virheellinen ikäluokka: {}", s))?;
+    if !(30..=90).contains(&band) || band % 5 != 0 {
+        return Err(format!("Ikäluokka {} ei ole WMA-välillä (30..90, 5 v välein)", band));
+    }
+    Ok(AgeCategory { gender, band })
+}
+
+pub fn category_filter(cat: &AgeCategory, ref_year: i32) -> CategoryFilter {
+    // age = ref_year - birth_year. age ∈ [band, band+5) ⇒
+    //   birth_year ∈ [ref_year - band - 4, ref_year - band]
+    let max_birth_year = ref_year - cat.band as i32;
+    let min_birth_year = max_birth_year - 4;
+    CategoryFilter { min_birth_year, max_birth_year, gender: cat.gender }
+}
+
+// Convenience: parse + compute filter using the current UTC year, if a value was provided.
+pub fn resolve_age_category(
+    raw: Option<&str>,
+) -> Result<Option<(AgeCategory, CategoryFilter)>, String> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) => {
+            let cat = parse_age_category(s)?;
+            let filter = category_filter(&cat, Utc::now().year());
+            Ok(Some((cat, filter)))
+        }
+    }
 }
 
 pub fn resolve_period(
@@ -153,7 +224,7 @@ pub fn resolve_period(
     match period.unwrap_or("all") {
         "all" => Ok((
             Period::All,
-            PeriodInfo { period: "all".to_string(), month: None, year: None },
+            PeriodInfo { period: "all".to_string(), month: None, year: None, category: None },
         )),
         "month" => {
             let (y, m) = match month {
@@ -173,6 +244,7 @@ pub fn resolve_period(
                     period: "month".to_string(),
                     month: Some(format!("{:04}-{:02}", y, m)),
                     year: None,
+                    category: None,
                 },
             ))
         }
@@ -193,6 +265,7 @@ pub fn resolve_period(
                     period: "year".to_string(),
                     month: None,
                     year: Some(format!("{:04}", y)),
+                    category: None,
                 },
             ))
         }
@@ -278,7 +351,18 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
          CREATE INDEX IF NOT EXISTS idx_runs_track_logged ON runs(track_id, logged_at);
          CREATE INDEX IF NOT EXISTS idx_runs_user_time    ON runs(user_id, time_seconds);
          CREATE INDEX IF NOT EXISTS idx_runs_logged_at    ON runs(logged_at);",
-    )
+    )?;
+
+    // Phase 2 column additions on `users`. Idempotent: skipped when the columns
+    // already exist. Both nullable — gender is validated at the app layer
+    // ('M' | 'F' | NULL) so CHECK constraints don't have to be rewritten later.
+    if !column_exists(conn, "users", "birth_year") {
+        conn.execute_batch(
+            "ALTER TABLE users ADD COLUMN birth_year INTEGER;
+             ALTER TABLE users ADD COLUMN gender TEXT;",
+        )?;
+    }
+    Ok(())
 }
 
 // Move legacy `tracks` (osm_id-keyed) out of the way before init_db creates the new schema.
@@ -604,8 +688,10 @@ pub fn get_records(
     user_id: Option<i64>,
     period: &Period,
     period_info: PeriodInfo,
+    category: Option<&CategoryFilter>,
     limit: u32,
 ) -> Result<TrackRecords, String> {
+    use rusqlite::types::Value;
     let conn = db.lock().unwrap();
 
     let sql = format!(
@@ -616,35 +702,39 @@ pub fn get_records(
         .query_row(&sql, params![track_id], row_to_track)
         .map_err(|e| e.to_string())?;
 
-    let where_extra = match period {
-        Period::All => "",
-        Period::Range { .. } => " AND r.logged_at >= ?2 AND r.logged_at < ?3",
-    };
+    let mut where_parts: Vec<&'static str> = vec!["r.track_id = ?"];
+    let mut vals: Vec<Value> = vec![Value::Integer(track_id)];
+    if let Period::Range { start, end } = period {
+        where_parts.push("r.logged_at >= ?");
+        where_parts.push("r.logged_at < ?");
+        vals.push(Value::Text(start.clone()));
+        vals.push(Value::Text(end.clone()));
+    }
+    if let Some(cat) = category {
+        where_parts.push("u.birth_year >= ?");
+        where_parts.push("u.birth_year <= ?");
+        where_parts.push("u.gender = ?");
+        vals.push(Value::Integer(cat.min_birth_year as i64));
+        vals.push(Value::Integer(cat.max_birth_year as i64));
+        vals.push(Value::Text(cat.gender.to_string()));
+    }
     let sql_records = format!(
         "SELECT u.display_name, r.time_seconds, r.logged_at \
          FROM runs r JOIN users u ON u.id = r.user_id \
-         WHERE r.track_id = ?1{} \
+         WHERE {} \
          ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT {}",
-        where_extra, limit
+        where_parts.join(" AND "),
+        limit
     );
 
     let mut stmt = conn.prepare(&sql_records).map_err(|e| e.to_string())?;
-
-    let row_mapper = |row: &rusqlite::Row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, String>(2)?))
-    };
-    let records_iter: Vec<(String, f64, String)> = match period {
-        Period::All => stmt
-            .query_map(params![track_id], row_mapper)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect(),
-        Period::Range { start, end } => stmt
-            .query_map(params![track_id, start, end], row_mapper)
-            .map_err(|e| e.to_string())?
-            .filter_map(|r| r.ok())
-            .collect(),
-    };
+    let records_iter: Vec<(String, f64, String)> = stmt
+        .query_map(rusqlite::params_from_iter(vals.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, String>(2)?))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
 
     let records: Vec<RecordEntry> = records_iter
         .into_iter()
@@ -674,61 +764,71 @@ pub fn get_records(
 }
 
 // Cross-track leaderboard: best single run per user (Strava-style "fastest 400 m" board).
-// Period filter narrows both the ranking window and the personal-best lookup.
+// Period filter narrows the ranking window; category filter restricts which users appear.
 pub fn get_leaderboard(
     db: &Db,
     user_id: Option<i64>,
     period: &Period,
     period_info: PeriodInfo,
+    category: Option<&CategoryFilter>,
     limit: u32,
 ) -> Result<Leaderboard, String> {
+    use rusqlite::types::Value;
     let conn = db.lock().unwrap();
 
     // The inner subquery picks each user's best run in the period; the outer WHERE
     // re-applies the period filter so users whose best falls outside the window
-    // don't leak in via the join.
-    let (sql, params_vec): (String, Vec<&dyn rusqlite::ToSql>) = match period {
-        Period::All => (
-            format!(
-                "SELECT u.id, u.display_name, r.time_seconds, r.logged_at, \
-                        r.track_id, t.name, t.city \
-                 FROM runs r \
-                 JOIN users u  ON u.id = r.user_id \
-                 JOIN tracks t ON t.id = r.track_id \
-                 WHERE r.id = ( \
-                     SELECT r2.id FROM runs r2 \
-                     WHERE r2.user_id = r.user_id \
-                     ORDER BY r2.time_seconds ASC, r2.logged_at ASC LIMIT 1 \
-                 ) \
-                 ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT {}",
-                limit
+    // don't leak in via the join. Category filtering applies only to the outer query
+    // since the inner is already correlated by user_id.
+    let (inner_period_clause, outer_period_clause, mut period_vals): (&str, &str, Vec<Value>) =
+        match period {
+            Period::All => ("", "", vec![]),
+            Period::Range { start, end } => (
+                " AND r2.logged_at >= ? AND r2.logged_at < ?",
+                " AND r.logged_at >= ? AND r.logged_at < ?",
+                vec![
+                    Value::Text(start.clone()),
+                    Value::Text(end.clone()),
+                    Value::Text(start.clone()),
+                    Value::Text(end.clone()),
+                ],
             ),
-            vec![],
-        ),
-        Period::Range { start, end } => (
-            format!(
-                "SELECT u.id, u.display_name, r.time_seconds, r.logged_at, \
-                        r.track_id, t.name, t.city \
-                 FROM runs r \
-                 JOIN users u  ON u.id = r.user_id \
-                 JOIN tracks t ON t.id = r.track_id \
-                 WHERE r.id = ( \
-                     SELECT r2.id FROM runs r2 \
-                     WHERE r2.user_id = r.user_id \
-                       AND r2.logged_at >= ?1 AND r2.logged_at < ?2 \
-                     ORDER BY r2.time_seconds ASC, r2.logged_at ASC LIMIT 1 \
-                 ) \
-                 AND r.logged_at >= ?1 AND r.logged_at < ?2 \
-                 ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT {}",
-                limit
-            ),
-            vec![start as &dyn rusqlite::ToSql, end as &dyn rusqlite::ToSql],
+        };
+
+    let (category_clause, category_vals): (String, Vec<Value>) = match category {
+        None => (String::new(), vec![]),
+        Some(cat) => (
+            " AND u.birth_year >= ? AND u.birth_year <= ? AND u.gender = ?".to_string(),
+            vec![
+                Value::Integer(cat.min_birth_year as i64),
+                Value::Integer(cat.max_birth_year as i64),
+                Value::Text(cat.gender.to_string()),
+            ],
         ),
     };
 
+    let sql = format!(
+        "SELECT u.id, u.display_name, r.time_seconds, r.logged_at, \
+                r.track_id, t.name, t.city \
+         FROM runs r \
+         JOIN users u  ON u.id = r.user_id \
+         JOIN tracks t ON t.id = r.track_id \
+         WHERE r.id = ( \
+             SELECT r2.id FROM runs r2 \
+             WHERE r2.user_id = r.user_id{} \
+             ORDER BY r2.time_seconds ASC, r2.logged_at ASC LIMIT 1 \
+         ){}{} \
+         ORDER BY r.time_seconds ASC, r.logged_at ASC LIMIT {}",
+        inner_period_clause, outer_period_clause, category_clause, limit
+    );
+
+    let mut vals: Vec<Value> = Vec::new();
+    vals.append(&mut period_vals);
+    vals.extend(category_vals);
+
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows: Vec<(i64, String, f64, String, i64, Option<String>, Option<String>)> = stmt
-        .query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+        .query_map(rusqlite::params_from_iter(vals.iter()), |row| {
             Ok((
                 row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
                 row.get(4)?, row.get(5)?, row.get(6)?,
@@ -828,6 +928,93 @@ pub fn remove_favorite(db: &Db, user_id: i64, track_id: i64) -> Result<(), Strin
     Ok(())
 }
 
+// --- User profile (Phase 2) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserProfile {
+    pub user_id: i64,
+    pub email: String,
+    pub display_name: String,
+    pub birth_year: Option<i32>,
+    pub gender: Option<String>,
+}
+
+pub fn get_user_profile(db: &Db, user_id: i64) -> Result<UserProfile, String> {
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT id, email, display_name, birth_year, gender FROM users WHERE id = ?1",
+        params![user_id],
+        |row| {
+            Ok(UserProfile {
+                user_id:      row.get(0)?,
+                email:        row.get(1)?,
+                display_name: row.get(2)?,
+                birth_year:   row.get(3)?,
+                gender:       row.get(4)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+// Full-replacement update of the editable profile fields. Pass `None` for
+// birth_year/gender to clear them. display_name is always required (non-empty).
+// The gender input accepts 'M' / 'N' / 'W' / 'F' (case-insensitive) and stores
+// 'M' for men and 'N' for women (matching Finnish UI conventions).
+pub fn update_user_profile(
+    db: &Db,
+    user_id: i64,
+    display_name: &str,
+    birth_year: Option<i32>,
+    gender: Option<&str>,
+) -> Result<UserProfile, String> {
+    let display_name = display_name.trim();
+    if display_name.is_empty() {
+        return Err("Nimi ei voi olla tyhjä".to_string());
+    }
+    if display_name.chars().count() > 50 {
+        return Err("Nimen enimmäispituus on 50 merkkiä".to_string());
+    }
+    if let Some(by) = birth_year {
+        if !(1900..=2100).contains(&by) {
+            return Err(format!("Syntymävuosi alueen ulkopuolella: {}", by));
+        }
+    }
+    let gender_normalized: Option<String> = match gender.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(g) => match g.to_ascii_uppercase().as_str() {
+            "M" => Some("M".to_string()),
+            "N" | "W" | "F" => Some("N".to_string()),
+            other => return Err(format!("Tuntematon sukupuoli: {}", other)),
+        },
+    };
+
+    let conn = db.lock().unwrap();
+    let changed = conn
+        .execute(
+            "UPDATE users SET display_name = ?1, birth_year = ?2, gender = ?3 WHERE id = ?4",
+            params![display_name, birth_year, gender_normalized, user_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("Käyttäjää ei löytynyt".to_string());
+    }
+    conn.query_row(
+        "SELECT id, email, display_name, birth_year, gender FROM users WHERE id = ?1",
+        params![user_id],
+        |row| {
+            Ok(UserProfile {
+                user_id:      row.get(0)?,
+                email:        row.get(1)?,
+                display_name: row.get(2)?,
+                birth_year:   row.get(3)?,
+                gender:       row.get(4)?,
+            })
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
 // --- Auth ---
 
 pub fn register_user(
@@ -881,7 +1068,7 @@ pub fn login_user(db: &Db, email: &str, password: &str) -> Result<(String, i64, 
     Ok((token, user_id, display_name))
 }
 
-fn make_jwt(user_id: i64, display_name: &str) -> Result<String, String> {
+pub fn make_jwt(user_id: i64, display_name: &str) -> Result<String, String> {
     let exp = (Utc::now() + chrono::Duration::days(30)).timestamp() as usize;
     let claims = Claims { sub: user_id, exp, display_name: display_name.to_string() };
     encode(
@@ -1161,7 +1348,7 @@ mod leaderboard_tests {
     use super::*;
 
     fn info_all() -> PeriodInfo {
-        PeriodInfo { period: "all".to_string(), month: None, year: None }
+        PeriodInfo { period: "all".to_string(), month: None, year: None, category: None }
     }
 
     fn insert_run(conn: &Connection, user_id: i64, track_id: i64, t: f64, ts: &str) {
@@ -1216,7 +1403,7 @@ mod leaderboard_tests {
             insert_run(&conn, bob,   track_a, 60.0, "2026-04-01T10:00:00+00:00");
             insert_run(&conn, alice, track_a, 70.0, "2026-05-01T10:00:00+00:00");
         }
-        let out = get_records(&db, track_a, None, &Period::All, info_all(), 10).unwrap();
+        let out = get_records(&db, track_a, None, &Period::All, info_all(), None, 10).unwrap();
         assert_eq!(out.records.len(), 3);
         assert_eq!(out.records[0].display_name, "Bob");
         assert_eq!(out.records[0].time_seconds, 60.0);
@@ -1234,7 +1421,7 @@ mod leaderboard_tests {
             insert_run(&conn, alice, track_a, 64.0, "2026-05-20T10:00:00+00:00");
         }
         let (p, info) = resolve_period(Some("month"), Some("2026-05"), None).unwrap();
-        let out = get_records(&db, track_a, None, &p, info, 10).unwrap();
+        let out = get_records(&db, track_a, None, &p, info, None, 10).unwrap();
         assert_eq!(out.records.len(), 2);
         assert!(out.records.iter().all(|r| r.logged_at.starts_with("2026-05")));
         assert_eq!(out.records[0].time_seconds, 62.0);
@@ -1249,7 +1436,7 @@ mod leaderboard_tests {
             insert_run(&conn, alice, track_a, 61.0, "2026-01-01T00:00:00+00:00");
         }
         let (p, info) = resolve_period(Some("year"), None, Some("2025")).unwrap();
-        let out = get_records(&db, track_a, None, &p, info, 10).unwrap();
+        let out = get_records(&db, track_a, None, &p, info, None, 10).unwrap();
         assert_eq!(out.records.len(), 1);
         assert_eq!(out.records[0].time_seconds, 60.0);
     }
@@ -1262,7 +1449,7 @@ mod leaderboard_tests {
             insert_run(&conn, bob,   track_a, 60.0, "2026-05-10T10:00:00+00:00");
             insert_run(&conn, alice, track_a, 60.0, "2026-05-01T10:00:00+00:00");
         }
-        let out = get_records(&db, track_a, None, &Period::All, info_all(), 10).unwrap();
+        let out = get_records(&db, track_a, None, &Period::All, info_all(), None, 10).unwrap();
         assert_eq!(out.records[0].display_name, "Alice");
         assert_eq!(out.records[1].display_name, "Bob");
     }
@@ -1276,7 +1463,7 @@ mod leaderboard_tests {
             insert_run(&conn, alice, track_a, 65.0, "2026-05-10T10:00:00+00:00");
         }
         let (p, info) = resolve_period(Some("month"), Some("2026-05"), None).unwrap();
-        let out = get_records(&db, track_a, Some(alice), &p, info, 10).unwrap();
+        let out = get_records(&db, track_a, Some(alice), &p, info, None, 10).unwrap();
         assert_eq!(out.records.len(), 1);
         assert_eq!(out.personal_best, Some(55.0));
     }
@@ -1291,7 +1478,7 @@ mod leaderboard_tests {
             insert_run(&conn, alice, track_a, 70.0, "2026-05-01T10:00:00+00:00");
             insert_run(&conn, bob,   track_a, 62.0, "2026-04-15T10:00:00+00:00");
         }
-        let board = get_leaderboard(&db, None, &Period::All, info_all(), 25).unwrap();
+        let board = get_leaderboard(&db, None, &Period::All, info_all(), None, 25).unwrap();
         assert_eq!(board.entries.len(), 2);
         assert_eq!(board.entries[0].display_name, "Alice");
         assert_eq!(board.entries[0].time_seconds, 60.0);
@@ -1310,7 +1497,7 @@ mod leaderboard_tests {
             insert_run(&conn, bob,   track_a, 62.0, "2026-05-10T10:00:00+00:00");
         }
         let (p, info) = resolve_period(Some("month"), Some("2026-05"), None).unwrap();
-        let board = get_leaderboard(&db, None, &p, info, 25).unwrap();
+        let board = get_leaderboard(&db, None, &p, info, None, 25).unwrap();
         assert_eq!(board.entries.len(), 1);
         assert_eq!(board.entries[0].display_name, "Bob");
     }
@@ -1324,14 +1511,14 @@ mod leaderboard_tests {
             insert_run(&conn, alice, track_a, 65.0, "2026-05-10T10:00:00+00:00");
         }
         let (p, info) = resolve_period(Some("year"), None, Some("2026")).unwrap();
-        let board = get_leaderboard(&db, Some(alice), &p, info, 25).unwrap();
+        let board = get_leaderboard(&db, Some(alice), &p, info, None, 25).unwrap();
         let pb = board.personal_best.unwrap();
         assert_eq!(pb.time_seconds, 65.0);
 
-        let board_all = get_leaderboard(&db, Some(alice), &Period::All, info_all(), 25).unwrap();
+        let board_all = get_leaderboard(&db, Some(alice), &Period::All, info_all(), None, 25).unwrap();
         assert_eq!(board_all.personal_best.unwrap().time_seconds, 55.0);
 
-        let board_anon = get_leaderboard(&db, None, &Period::All, info_all(), 25).unwrap();
+        let board_anon = get_leaderboard(&db, None, &Period::All, info_all(), None, 25).unwrap();
         assert!(board_anon.personal_best.is_none());
     }
 
@@ -1373,10 +1560,237 @@ mod leaderboard_tests {
                 );
             }
         }
-        let out = get_records(&db, track_a, None, &Period::All, info_all(), 5).unwrap();
+        let out = get_records(&db, track_a, None, &Period::All, info_all(), None, 5).unwrap();
         assert_eq!(out.records.len(), 5);
         assert_eq!(clamp_limit(Some(9999)), LEADERBOARD_MAX_LIMIT);
         assert_eq!(clamp_limit(Some(0)), 1);
         assert_eq!(clamp_limit(None), LEADERBOARD_DEFAULT_LIMIT);
+    }
+}
+
+#[cfg(test)]
+mod phase2_tests {
+    use super::*;
+
+    fn info_all() -> PeriodInfo {
+        PeriodInfo { period: "all".to_string(), month: None, year: None, category: None }
+    }
+
+    fn insert_run(conn: &Connection, user_id: i64, track_id: i64, t: f64, ts: &str) {
+        conn.execute(
+            "INSERT INTO runs (user_id, track_id, time_seconds, logged_at) VALUES (?1, ?2, ?3, ?4)",
+            params![user_id, track_id, t, ts],
+        )
+        .unwrap();
+    }
+
+    fn insert_user(
+        conn: &Connection,
+        email: &str,
+        name: &str,
+        birth_year: Option<i32>,
+        gender: Option<&str>,
+    ) -> i64 {
+        conn.execute(
+            "INSERT INTO users (email, display_name, password_hash, created_at, birth_year, gender) \
+             VALUES (?1, ?2, 'h', '2026-01-01', ?3, ?4)",
+            params![email, name, birth_year, gender],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    fn fresh_db() -> Db {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        Arc::new(Mutex::new(conn))
+    }
+
+    fn fresh_db_with_track() -> (Db, i64) {
+        let db = fresh_db();
+        let track_id;
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO tracks (lipas_id, name, lat, lon, type_code, status, last_synced_at, city) \
+                 VALUES (1, 'A-rata', 60.0, 24.0, 1220, 'active', '2026-05-05', 'Helsinki')",
+                [],
+            )
+            .unwrap();
+            track_id = conn.last_insert_rowid();
+        }
+        (db, track_id)
+    }
+
+    // --- parse_age_category / category_filter ---
+
+    #[test]
+    fn parse_age_category_accepts_m_and_n_bands() {
+        assert_eq!(parse_age_category("M40").unwrap(), AgeCategory { gender: 'M', band: 40 });
+        assert_eq!(parse_age_category("N55").unwrap(), AgeCategory { gender: 'N', band: 55 });
+        // WMA-style 'W' alias maps to 'N' internally so we match users.gender='N'.
+        assert_eq!(parse_age_category("W30").unwrap(), AgeCategory { gender: 'N', band: 30 });
+        assert_eq!(parse_age_category("m65").unwrap(), AgeCategory { gender: 'M', band: 65 });
+    }
+
+    #[test]
+    fn parse_age_category_rejects_out_of_range_or_garbled_input() {
+        assert!(parse_age_category("M29").is_err());
+        assert!(parse_age_category("M95").is_err());
+        assert!(parse_age_category("M42").is_err()); // not a 5-year band
+        assert!(parse_age_category("X40").is_err()); // unknown gender
+        assert!(parse_age_category("").is_err());
+        assert!(parse_age_category("M").is_err());
+        assert!(parse_age_category("Mfoo").is_err());
+    }
+
+    #[test]
+    fn category_filter_computes_5_year_birth_year_window() {
+        // M40 in 2026 → ages 40..45 → born 1982..=1986
+        let f = category_filter(&AgeCategory { gender: 'M', band: 40 }, 2026);
+        assert_eq!(f.min_birth_year, 1982);
+        assert_eq!(f.max_birth_year, 1986);
+        assert_eq!(f.gender, 'M');
+    }
+
+    #[test]
+    fn resolve_age_category_returns_none_for_empty_input() {
+        assert!(resolve_age_category(None).unwrap().is_none());
+        assert!(resolve_age_category(Some("")).unwrap().is_none());
+        assert!(resolve_age_category(Some("   ")).unwrap().is_none());
+    }
+
+    // --- get_records / get_leaderboard with category filter ---
+
+    #[test]
+    fn get_records_category_filter_keeps_only_matching_users() {
+        let (db, track_id) = fresh_db_with_track();
+        let ref_year = Utc::now().year();
+        let m40_birth = ref_year - 42; // squarely in M40
+        let m50_birth = ref_year - 52;
+        let (a_id, b_id);
+        {
+            let conn = db.lock().unwrap();
+            a_id = insert_user(&conn, "a@e.c", "M40 Alice", Some(m40_birth), Some("M"));
+            b_id = insert_user(&conn, "b@e.c", "M50 Bob",   Some(m50_birth), Some("M"));
+            insert_run(&conn, a_id, track_id, 65.0, "2026-04-10T10:00:00+00:00");
+            insert_run(&conn, b_id, track_id, 60.0, "2026-04-12T10:00:00+00:00");
+        }
+        let (cat, filter) = resolve_age_category(Some("M40")).unwrap().unwrap();
+        assert_eq!(cat.band, 40);
+        let mut info = info_all();
+        info.category = Some(cat.as_code());
+        let out = get_records(&db, track_id, None, &Period::All, info, Some(&filter), 25).unwrap();
+        assert_eq!(out.records.len(), 1);
+        assert_eq!(out.records[0].display_name, "M40 Alice");
+    }
+
+    #[test]
+    fn get_records_category_filter_excludes_users_missing_profile_fields() {
+        let (db, track_id) = fresh_db_with_track();
+        let ref_year = Utc::now().year();
+        let (with_profile, without_profile);
+        {
+            let conn = db.lock().unwrap();
+            with_profile    = insert_user(&conn, "p@e.c", "Full", Some(ref_year - 42), Some("M"));
+            without_profile = insert_user(&conn, "x@e.c", "Anon", None, None);
+            insert_run(&conn, with_profile,    track_id, 60.0, "2026-04-10T10:00:00+00:00");
+            insert_run(&conn, without_profile, track_id, 55.0, "2026-04-12T10:00:00+00:00");
+        }
+        let (_, filter) = resolve_age_category(Some("M40")).unwrap().unwrap();
+        let out = get_records(&db, track_id, None, &Period::All, info_all(), Some(&filter), 25).unwrap();
+        assert_eq!(out.records.len(), 1);
+        assert_eq!(out.records[0].display_name, "Full");
+    }
+
+    #[test]
+    fn get_leaderboard_category_filter_restricts_user_set() {
+        let (db, track_id) = fresh_db_with_track();
+        let ref_year = Utc::now().year();
+        let (m40, n40);
+        {
+            let conn = db.lock().unwrap();
+            m40 = insert_user(&conn, "m@e.c", "Mies",   Some(ref_year - 41), Some("M"));
+            n40 = insert_user(&conn, "n@e.c", "Nainen", Some(ref_year - 41), Some("N"));
+            insert_run(&conn, m40, track_id, 62.0, "2026-04-10T10:00:00+00:00");
+            insert_run(&conn, n40, track_id, 58.0, "2026-04-11T10:00:00+00:00");
+        }
+        let (_, n40_filter) = resolve_age_category(Some("N40")).unwrap().unwrap();
+        let board = get_leaderboard(&db, None, &Period::All, info_all(), Some(&n40_filter), 25).unwrap();
+        assert_eq!(board.entries.len(), 1);
+        assert_eq!(board.entries[0].display_name, "Nainen");
+    }
+
+    #[test]
+    fn get_leaderboard_category_combines_with_period_filter() {
+        let (db, track_id) = fresh_db_with_track();
+        let ref_year = Utc::now().year();
+        let m40_id;
+        {
+            let conn = db.lock().unwrap();
+            m40_id = insert_user(&conn, "m@e.c", "M40", Some(ref_year - 42), Some("M"));
+            insert_run(&conn, m40_id, track_id, 70.0, "2025-06-01T10:00:00+00:00");
+            insert_run(&conn, m40_id, track_id, 65.0, "2026-04-10T10:00:00+00:00");
+        }
+        let (p, mut info) = resolve_period(Some("year"), None, Some("2026")).unwrap();
+        let (_, filter) = resolve_age_category(Some("M40")).unwrap().unwrap();
+        info.category = Some("M40".to_string());
+        let board = get_leaderboard(&db, None, &p, info, Some(&filter), 25).unwrap();
+        assert_eq!(board.entries.len(), 1);
+        assert_eq!(board.entries[0].time_seconds, 65.0);
+    }
+
+    // --- get_user_profile / update_user_profile ---
+
+    #[test]
+    fn user_profile_round_trip_set_and_clear() {
+        let db = fresh_db();
+        let uid;
+        {
+            let conn = db.lock().unwrap();
+            uid = insert_user(&conn, "u@e.c", "Uula", None, None);
+        }
+        let p0 = get_user_profile(&db, uid).unwrap();
+        assert_eq!(p0.display_name, "Uula");
+        assert!(p0.birth_year.is_none());
+        assert!(p0.gender.is_none());
+
+        // Set everything
+        let p1 = update_user_profile(&db, uid, "Uula Uimari", Some(1984), Some("M")).unwrap();
+        assert_eq!(p1.display_name, "Uula Uimari");
+        assert_eq!(p1.birth_year, Some(1984));
+        assert_eq!(p1.gender.as_deref(), Some("M"));
+
+        // Clear birth_year + gender (display_name still required)
+        let p2 = update_user_profile(&db, uid, "Uula Uimari", None, None).unwrap();
+        assert!(p2.birth_year.is_none());
+        assert!(p2.gender.is_none());
+    }
+
+    #[test]
+    fn update_user_profile_normalises_gender_aliases() {
+        let db = fresh_db();
+        let uid = {
+            let conn = db.lock().unwrap();
+            insert_user(&conn, "g@e.c", "G", None, None)
+        };
+        let p = update_user_profile(&db, uid, "G", Some(1990), Some("W")).unwrap();
+        assert_eq!(p.gender.as_deref(), Some("N")); // WMA 'W' → Finnish 'N'
+        let p2 = update_user_profile(&db, uid, "G", Some(1990), Some("f")).unwrap();
+        assert_eq!(p2.gender.as_deref(), Some("N"));
+    }
+
+    #[test]
+    fn update_user_profile_rejects_invalid_inputs() {
+        let db = fresh_db();
+        let uid = {
+            let conn = db.lock().unwrap();
+            insert_user(&conn, "v@e.c", "V", None, None)
+        };
+        assert!(update_user_profile(&db, uid, "", None, None).is_err());
+        assert!(update_user_profile(&db, uid, "   ", None, None).is_err());
+        assert!(update_user_profile(&db, uid, "V", Some(1800), None).is_err());
+        assert!(update_user_profile(&db, uid, "V", Some(2200), None).is_err());
+        assert!(update_user_profile(&db, uid, "V", None, Some("X")).is_err());
     }
 }
