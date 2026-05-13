@@ -18,12 +18,17 @@ test('Pörssi link navigates to the leaderboard view and shows seeded entries', 
   await expect(page).toHaveURL(/#\/leaderboard$/);
 
   // Leaderboard table appears with the seeded entries. Bob holds the overall
-  // best at 58.40 — that's the row we anchor on.
+  // best at 58.40 — that's the row we anchor on. The smoke step that runs
+  // before Playwright (e2e/smoke.sh) registers a one-off user and logs a 75.4
+  // run, so the row count is non-deterministic; only the seeded ordering is.
   const lbTable = page.locator('.lb-table');
   await expect(lbTable).toBeVisible({ timeout: 10_000 });
-  await expect(lbTable.locator('tbody tr')).toHaveCount(3);
-  await expect(lbTable.locator('tbody tr').first()).toContainText('E2E Bob');
-  await expect(lbTable.locator('tbody tr').first()).toContainText('58.40');
+  const rows = lbTable.locator('tbody tr');
+  // Wait for at least the 3 seeded rows to be present, without asserting an
+  // exact count.
+  await expect(rows.nth(2)).toBeVisible({ timeout: 10_000 });
+  await expect(rows.first()).toContainText('E2E Bob');
+  await expect(rows.first()).toContainText('58.40');
 
   // Period buttons are present and "Kaikki" is the active default.
   const periodBtns = page.locator('#lb-period-selector button');
