@@ -2,6 +2,8 @@
 
 Finnish web app for discovering athletics tracks (juoksuradat) in Finland and logging personal 400 m runs.
 
+Try it out: [https://ratakierros.fi/](https://ratakierros.fi/)
+
 ## Features
 
 - **Track directory** — Browse all athletics tracks in Finland sourced from OpenStreetMap

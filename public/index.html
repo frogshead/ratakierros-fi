@@ -306,6 +306,29 @@
       flex-shrink: 0;
     }
 
+    .map-resize-handle {
+      flex-shrink: 0;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.7rem;
+      line-height: 1;
+      letter-spacing: 2px;
+      cursor: row-resize;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .map-resize-handle:hover,
+    .map-resize-handle.dragging {
+      background: var(--border);
+      color: var(--text);
+    }
+
     /* ── Detail sections ─────────────────────────────────── */
     .detail-section {
       padding: 1rem;
@@ -645,7 +668,7 @@
       font-size: 0.85rem;
     }
 
-    /* ── Leaderboard (Pörssi) view ───────────────────────── */
+    /* ── Leaderboard (Kenttäennätykset) view ─────────────── */
     .nav-link {
       background: transparent;
       border: none;
@@ -778,7 +801,7 @@
     <div class="sidebar-header">
       <h1>🏃 Ratakierros.fi</h1>
       <div class="sidebar-header-actions">
-        <a class="nav-link" href="#/leaderboard" id="nav-leaderboard">🏆 Pörssi</a>
+        <a class="nav-link" href="#/leaderboard" id="nav-leaderboard">🏆 Kenttäennätykset</a>
         <button class="btn-user" id="btn-user">Kirjaudu</button>
       </div>
     </div>
@@ -818,11 +841,11 @@
 
 </div>
 
-<!-- ── Leaderboard (Pörssi) view ──────────────────────── -->
+<!-- ── Leaderboard (Kenttäennätykset) view ─────────────── -->
 <div class="leaderboard-view" id="leaderboard-view">
   <div class="lb-header">
     <a class="nav-link" href="#/" id="lb-back">← Kartalle</a>
-    <h2>🏆 Pörssi — 400 m parhaat</h2>
+    <h2>🏆 Kenttäennätykset — 400 m parhaat</h2>
   </div>
   <div class="lb-controls">
     <div class="filter-row">
@@ -1103,6 +1126,8 @@ function renderDetail({ track, records, personal_best }) {
 
   document.getElementById('detail-content').innerHTML = `
     <div id="detail-map"></div>
+    <div class="map-resize-handle" id="map-resize-handle"
+         title="Vedä muuttaaksesi kartan kokoa">⋮⋮⋮</div>
     <div class="detail-section">
       <div class="section-title">Sijainti</div>
       <a class="btn-directions"
@@ -1185,6 +1210,39 @@ function initDetailMap(lat, lon, name) {
     .addTo(state.detailMap)
     .bindPopup(esc(name))
     .openPopup();
+
+  bindMapResizeHandle(el);
+}
+
+// ── Map resize handle ──────────────────────────────────────
+const MIN_MAP_H = 120;
+const MAX_MAP_H = 600;
+
+function bindMapResizeHandle(mapEl) {
+  const handle = document.getElementById('map-resize-handle');
+  if (!handle) return;
+
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = mapEl.offsetHeight;
+    const maxH = Math.min(MAX_MAP_H, window.innerHeight - 160);
+    handle.classList.add('dragging');
+
+    const onMove = (ev) => {
+      let newH = startH + (ev.clientY - startY);
+      newH = Math.max(MIN_MAP_H, Math.min(maxH, newH));
+      mapEl.style.height = newH + 'px';
+      if (state.detailMap) state.detailMap.invalidateSize();
+    };
+    const onUp = () => {
+      handle.classList.remove('dragging');
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
 }
 
 // ── Favorites ──────────────────────────────────────────────
@@ -1558,7 +1616,7 @@ async function doAuth() {
   }
 }
 
-// ── Leaderboard (Pörssi) ───────────────────────────────────
+// ── Leaderboard (Kenttäennätykset) ─────────────────────────
 function fetchLeaderboard(period, category) {
   const p = new URLSearchParams();
   if (period && period !== 'all') p.set('period', period);
