@@ -43,7 +43,9 @@ async fn returns_seeded_open_class_records() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let records = v["records"].as_array().expect("records[] array");
     assert!(records.len() >= 2, "expected at least 2 seeded records, got {}", records.len());

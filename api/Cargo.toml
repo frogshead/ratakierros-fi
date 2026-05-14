@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = { version = "0.6.12", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart"] }
 gpx = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -12,15 +12,14 @@ geo = "0.33.1"
 geo-types = "0.7"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", features = ["json"] }
-tower-http = { version = "0.4", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 argon2 = "0.5"
 rand_core = { version = "0.6", features = ["getrandom"] }
 chrono = { version = "0.4", features = ["serde"] }
 time = "0.3"
-async-trait = "0.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-hyper = { version = "0.14", features = ["full"] }
+hyper = { version = "1", features = ["full"] }
