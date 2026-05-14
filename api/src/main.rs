@@ -9,6 +9,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
+use tower_http::trace::{self, TraceLayer};
+use tracing::Level;
+use tracing_subscriber::EnvFilter;
 
 use ratakierros_api::{
     add_favorite, analyze_gpx, clamp_limit, fetch_and_cache_lipas_tracks,
@@ -30,10 +33,19 @@ enum AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, msg) = match self {
-            AppError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m),
-            AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
+            AppError::Unauthorized(m) => {
+                tracing::debug!(error = %m, "401 Unauthorized");
+                (StatusCode::UNAUTHORIZED, m)
+            }
+            AppError::BadRequest(m) => {
+                tracing::debug!(error = %m, "400 Bad Request");
+                (StatusCode::BAD_REQUEST, m)
+            }
             AppError::NotFound => (StatusCode::NOT_FOUND, "Not found".to_string()),
-            AppError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
+            AppError::Internal(m) => {
+                tracing::error!(error = %m, "500 Internal Server Error");
+                (StatusCode::INTERNAL_SERVER_ERROR, m)
+            }
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()
     }
@@ -425,6 +437,15 @@ async fn refresh_tracks_handler(Extension(db): Extension<Db>) -> impl IntoRespon
 
 #[tokio::main]
 async fn main() {
+    // Logging. Level is controlled by RUST_LOG (e.g. `RUST_LOG=debug`);
+    // defaults to `info` for the app and request traces.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
+        )
+        .init();
+
     let db_path =
         std::env::var("DATABASE_PATH").unwrap_or_else(|_| "ratakierros.db".to_string());
 
@@ -447,15 +468,15 @@ async fn main() {
     };
 
     if needs_lipas_seed {
-        println!("Fetching tracks from Lipas API v2...");
+        tracing::info!("Fetching tracks from Lipas API v2...");
         let db_clone = db.clone();
         tokio::spawn(async move {
             match fetch_and_cache_lipas_tracks(db_clone.clone()).await {
                 Ok(n) => {
-                    println!("Fetched and cached {} tracks from Lipas", n);
+                    tracing::info!("Fetched and cached {} tracks from Lipas", n);
                     match finalize_legacy_migration(&db_clone) {
                         Ok((remapped, orphaned)) if remapped > 0 || orphaned > 0 => {
-                            println!(
+                            tracing::info!(
                                 "Legacy migration: {} runs rehomed onto Lipas tracks, \
                                  {} orphan tracks preserved (had runs but no Lipas match)",
                                 remapped, orphaned
@@ -464,11 +485,11 @@ async fn main() {
                         _ => {}
                     }
                 }
-                Err(e) => eprintln!("Lipas fetch failed: {}", e),
+                Err(e) => tracing::error!("Lipas fetch failed: {}", e),
             }
         });
     } else {
-        println!("Loaded {} tracks from database", tracks_count(&db));
+        tracing::info!("Loaded {} tracks from database", tracks_count(&db));
     }
 
     let app = Router::new()
@@ -492,9 +513,13 @@ async fn main() {
         )
         .route("/api/admin/refresh-tracks", post(refresh_tracks_handler))
         .layer(Extension(db))
-        .layer(CorsLayer::permissive());
+        .layer(CorsLayer::permissive())
+        .layer(
+            TraceLayer::new_for_http()
+                .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
+        );
 
-    println!("API server running on http://0.0.0.0:3000");
+    tracing::info!("API server running on http://0.0.0.0:3000");
     axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
         .serve(app.into_make_service())
         .await

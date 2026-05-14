@@ -12,7 +12,7 @@ geo = "0.33.1"
 geo-types = "0.7"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", features = ["json"] }
-tower-http = { version = "0.4", features = ["cors"] }
+tower-http = { version = "0.4", features = ["cors", "trace"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 jsonwebtoken = "9"
 argon2 = "0.5"
@@ -20,6 +20,8 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 chrono = { version = "0.4", features = ["serde"] }
 time = "0.3"
 async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
