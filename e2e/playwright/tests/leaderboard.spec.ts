@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 
 // Browser-driven test for the Strava-style leaderboard feature:
-// the Pörssi cross-track view + the per-track period selector.
+// the Kenttäennätykset cross-track view + the per-track period selector.
 // Fixtures live in e2e/seed.sql (3 tracks, 3 users, 6 historical runs).
 
-test('Pörssi link navigates to the leaderboard view and shows seeded entries', async ({ page }) => {
+test('Kenttäennätykset link navigates to the leaderboard view and shows seeded entries', async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on('console', msg => { if (msg.type() === 'error') consoleErrors.push(msg.text()); });
 
@@ -13,7 +13,7 @@ test('Pörssi link navigates to the leaderboard view and shows seeded entries', 
   // Wait for the track list to be present so the app is fully initialised.
   await expect(page.locator('.track-card').first()).toBeVisible({ timeout: 15_000 });
 
-  // Click the Pörssi link.
+  // Click the Kenttäennätykset link.
   await page.locator('#nav-leaderboard').click();
   await expect(page).toHaveURL(/#\/leaderboard$/);
 
@@ -66,7 +66,7 @@ test('Clicking a leaderboard track link navigates back to the map detail view', 
   await expect(page.locator('#detail-title')).toHaveText(/.+/, { timeout: 10_000 });
 });
 
-test('Suomen ennätys banner shows the seeded open-class records on the Pörssi view', async ({ page }) => {
+test('Suomen ennätys banner shows the seeded open-class records on the Kenttäennätykset view', async ({ page }) => {
   // Phase 3: GET /api/finnish-records returns OPEN_M (45.49 Kukkoaho 1972)
   // and OPEN_N (50.14 Salin 1974). With no category filter the banner must
   // surface both rows above the table.
