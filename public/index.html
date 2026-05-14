@@ -645,7 +645,7 @@
       font-size: 0.85rem;
     }
 
-    /* ── Leaderboard (Pörssi) view ───────────────────────── */
+    /* ── Leaderboard (Kenttäennätykset) view ─────────────── */
     .nav-link {
       background: transparent;
       border: none;
@@ -778,7 +778,7 @@
     <div class="sidebar-header">
       <h1>🏃 Ratakierros.fi</h1>
       <div class="sidebar-header-actions">
-        <a class="nav-link" href="#/leaderboard" id="nav-leaderboard">🏆 Pörssi</a>
+        <a class="nav-link" href="#/leaderboard" id="nav-leaderboard">🏆 Kenttäennätykset</a>
         <button class="btn-user" id="btn-user">Kirjaudu</button>
       </div>
     </div>
@@ -818,11 +818,11 @@
 
 </div>
 
-<!-- ── Leaderboard (Pörssi) view ──────────────────────── -->
+<!-- ── Leaderboard (Kenttäennätykset) view ─────────────── -->
 <div class="leaderboard-view" id="leaderboard-view">
   <div class="lb-header">
     <a class="nav-link" href="#/" id="lb-back">← Kartalle</a>
-    <h2>🏆 Pörssi — 400 m parhaat</h2>
+    <h2>🏆 Kenttäennätykset — 400 m parhaat</h2>
   </div>
   <div class="lb-controls">
     <div class="filter-row">
@@ -1558,7 +1558,7 @@ async function doAuth() {
   }
 }
 
-// ── Leaderboard (Pörssi) ───────────────────────────────────
+// ── Leaderboard (Kenttäennätykset) ─────────────────────────
 function fetchLeaderboard(period, category) {
   const p = new URLSearchParams();
   if (period && period !== 'all') p.set('period', period);
