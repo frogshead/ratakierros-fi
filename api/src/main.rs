@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use axum::{
     extract::{DefaultBodyLimit, Extension, FromRequestParts, Multipart, Path, Query},
     http::{request::Parts, StatusCode},
@@ -43,7 +42,6 @@ impl IntoResponse for AppError {
 
 struct AuthUser(i64);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
@@ -67,7 +65,6 @@ where
 
 struct OptionalAuthUser(Option<i64>);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for OptionalAuthUser
 where
     S: Send + Sync,
@@ -474,13 +471,13 @@ async fn main() {
     let app = Router::new()
         .route("/api/health", get(health_handler))
         .route("/api/tracks", get(tracks_handler))
-        .route("/api/tracks/:id", get(track_handler))
-        .route("/api/tracks/:id/records", get(records_handler))
+        .route("/api/tracks/{id}", get(track_handler))
+        .route("/api/tracks/{id}/records", get(records_handler))
         .route("/api/leaderboard", get(leaderboard_handler))
         .route("/api/finnish-records", get(finnish_records_handler))
         .route("/api/runs", post(log_run_handler))
         .route(
-            "/api/favorites/:track_id",
+            "/api/favorites/{track_id}",
             post(add_favorite_handler).delete(remove_favorite_handler),
         )
         .route("/api/auth/register", post(register_handler))
@@ -495,8 +492,8 @@ async fn main() {
         .layer(CorsLayer::permissive());
 
     println!("API server running on http://0.0.0.0:3000");
-    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
-        .serve(app.into_make_service())
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
         .unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
