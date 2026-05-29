@@ -25,4 +25,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-hyper = { version = "0.14", features = ["full"] }
+hyper = { version = "1.9", features = ["full"] }
