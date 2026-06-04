@@ -10,6 +10,7 @@ services:
     environment:
       - DATABASE_PATH=/data/ratakierros.db
       - JWT_SECRET=change-this-to-a-long-random-secret-in-production
+      - RUST_LOG=info
     logging:
       driver: json-file
       options:
