@@ -77,7 +77,7 @@ jobs:
         run: bash e2e/smoke.sh
 
       - name: Setup Node (for Playwright)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
