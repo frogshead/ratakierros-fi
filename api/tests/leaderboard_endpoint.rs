@@ -133,14 +133,16 @@ fn build_app() -> (Router, i64) {
     let _ = (alice, bob); // ids are referenced only when seeding rows above
     let db: Db = Arc::new(Mutex::new(conn));
     let app = Router::new()
-        .route("/api/tracks/:id/records", get(records_handler))
+        .route("/api/tracks/{id}/records", get(records_handler))
         .route("/api/leaderboard", get(leaderboard_handler))
         .layer(Extension(db));
     (app, track_id)
 }
 
 async fn json_of(resp: Response) -> serde_json::Value {
-    let bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 

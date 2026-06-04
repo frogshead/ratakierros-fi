@@ -114,7 +114,7 @@ async fn analyze_endpoint_happy_path() {
     let resp = router().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let best = &v["best_lap"];
     let secs = best["time_seconds"].as_f64().expect("time_seconds f64");
@@ -172,7 +172,7 @@ async fn analyze_endpoint_too_short_400() {
         .unwrap();
     let resp = router().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let s = std::str::from_utf8(&body_bytes).unwrap();
     assert!(s.contains("lyhyempi"), "body: {}", s);
 }
@@ -191,7 +191,7 @@ async fn analyze_endpoint_custom_distance() {
         .unwrap();
     let resp = router().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let secs = v["best_lap"]["time_seconds"].as_f64().unwrap();
     // 200 m at 4 m/s = 50 s.

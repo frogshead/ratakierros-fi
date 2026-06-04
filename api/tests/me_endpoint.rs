@@ -4,7 +4,6 @@
 //! shape, validation, and the JWT-refresh-on-name-change behaviour. We
 //! duplicate the AuthUser extractor here because main.rs's copy is private.
 
-use async_trait::async_trait;
 use axum::{
     body::Body,
     extract::{Extension, FromRequestParts},
@@ -43,7 +42,6 @@ struct ProfileResponse {
 
 struct AuthUser(i64);
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
@@ -131,7 +129,9 @@ fn build_app() -> (Router, i64, String) {
 }
 
 async fn json_of(resp: Response) -> serde_json::Value {
-    let bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
