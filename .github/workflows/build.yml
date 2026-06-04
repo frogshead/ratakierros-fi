@@ -83,7 +83,10 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
         working-directory: api
-        run: cargo audit
+        # RUSTSEC-2023-0071: rsa 0.9 Marvin Attack — rsa is a transitive dep of
+        # jsonwebtoken 10 (rust_crypto feature) but we only use HS256 (HMAC),
+        # so RSA operations are never called. No fixed version available upstream.
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
   scan-images:
     needs: [build-api, build-frontend]
