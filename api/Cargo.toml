@@ -12,7 +12,7 @@ geo = "0.33.1"
 geo-types = "0.7"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", features = ["json"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 argon2 = "0.5"
